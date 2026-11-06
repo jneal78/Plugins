@@ -1,7 +1,7 @@
 # <Product> `<schema>.<object>`: <statement> <cost in a phrase>
 
-**For:** <vendor> support (<module>)
-**From:** <company>, DBA team (<date>)
+**For:** <vendor> support (<module>) \
+**From:** <company>, DBA team (<date>) \
 **Product:** <product>, `<schema>.<object>` as installed by our <date> upgrade. Revision header last entry: "<…>". SQL Server <version> (<build>), compatibility level <n>, <CE>
 
 ## Summary
@@ -27,6 +27,15 @@ The <object> runs <how often, from where>. Its <statement> costs:
 | With the change below | | | | identical |
 
 - <Variant that does not help, and why>
+
+## Reproduce and verify on your side
+
+Read-only, safe on a test system or production: `<repro_<object>.sql>` (attached). It prints the environment and data shape (compare with ours), runs the statement as shipped and with our change <n> times each, and prints CPU, elapsed, logical and physical reads, file I/O and waits per run, plus a row count and checksum for both.
+
+1. Run sections 0–2; our values: compatibility level <n>, <CE>, MAXDOP <n>, `<table>` <n> rows, `<object>` SHA-256 `<0x…>`.
+2. Set `@p1…` to <values>, run the script.
+3. You should see: as shipped <operator> on `<table>`, about <n> reads and <n> ms CPU; with the change <operator>, about <n> reads; same rows.
+4. The plans: `<object>_as_shipped.sqlplan`, `<object>_with_change.sqlplan` (attached).
 
 ## What we have done locally (marked `-- <MARKER>`)
 

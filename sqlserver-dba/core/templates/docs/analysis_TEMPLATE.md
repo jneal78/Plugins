@@ -63,6 +63,8 @@ flowchart LR
 
 **Proof.** <patched / original / patched table: CPU, elapsed, reads, rows identical.>
 
+**Reproduce it.** `repro_<object>.sql` (read-only) runs the statement as shipped and with the change and prints CPU, reads, physical I/O and waits per run, plus the environment and data shape it depends on. Anyone can re-run it after an upgrade; the vendor gets the same file.
+
 **Saving.** ≈ <n> CPU-min/day; <other effects: fewer parallel queries, timeouts gone>.
 
 ## Finding 2: …
@@ -81,7 +83,7 @@ flowchart LR
 | Step | Owner | Script / doc |
 |---|---|---|
 | Parity check, then guarded deploy | DBA | `sql\vendor_patches\<object>\` |
-| Send the vendor note | <name> | `<Vendor>_<object>.md` |
+| Send the vendor note with its reproduction kit | <name> | `<Vendor>_<object>.md`, `repro_<object>.sql`, the two `.sqlplan` files |
 | Re-check after the next upgrade | DBA | `Verify_<object>.sql`, section 1 |
 
 ## Updates

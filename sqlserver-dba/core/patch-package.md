@@ -10,7 +10,7 @@ A patch to vendor code is only as good as its deploy and its way back. Every pat
 | `Parity_<obj>_ReadOnly.sql` | Original vs patched statement, patched / original / patched, rows and cost compared | DBA (it writes to `#temp`) |
 | `Verify_<obj>.sql` | Read-only: version (original / patched / changed), plan cache per statement, Query Store per hour before vs after, errors and timeouts | Anyone; Claude can run it |
 | `README.md` | Problem, change, measured results, variants tried, files, hashes, deploy steps, what to do after upgrades | — |
-| `<Vendor>_<obj>.md` | The vendor note | Sent by the user |
+| `<Vendor>_<obj>.md` + `repro_<obj>.sql` | The vendor note, with its reproduction kit (read-only; from `core/templates/docs/repro_kit_TEMPLATE.sql`) and the two `.sqlplan` files | Sent by the user |
 
 ## Building from the live definition
 
@@ -99,4 +99,4 @@ Every patch goes on an upgrade checklist. After an upgrade, run section 1 of eac
 
 ## The vendor note (`core/templates/docs/vendor_note_TEMPLATE.md`)
 
-Short and in the vendor's terms: product, object, version header, SQL Server version and compatibility level and CE; the statement; the cause (operator, table, index, rows); evidence table (as shipped vs with hints, same rows); what we changed locally (the exact lines); the permanent fix we suggest (rewrite or an index the vendor ships); and the question "will a future release replace this object?"
+Short and in the vendor's terms: product, object, version header, SQL Server version and compatibility level and CE; the statement; the cause (operator, table, index, rows); evidence table (as shipped vs with hints, same rows); how to reproduce and verify it (the kit, run by us first so the vendor can compare numbers: see sql-findings-report `references/repro-kit.md`); what we changed locally (the exact lines); the permanent fix we suggest (rewrite or an index the vendor ships); and the question "will a future release replace this object?"

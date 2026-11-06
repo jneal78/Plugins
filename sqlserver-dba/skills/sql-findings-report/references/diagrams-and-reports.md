@@ -102,7 +102,7 @@ The shell loads `marked@12.0.2` and `mermaid@10.9.1` from jsDelivr, so the machi
 7. Next steps with owners. Updates appended as dated sections ("Update 14:35: hot-fix verified").
 
 ### Vendor ticket (`core/templates/docs/vendor_ticket_TEMPLATE.md`)
-Summary → component identification (how we know) → the defect (statement, types, error) → sequence diagram → evidence (daily counts, start date) → impact assessment (data, business, exposure, performance) → what we did locally → suggested fix → asks → appendix (scripts, raw output).
+Summary → component identification (how we know) → the defect (statement, types, error) → sequence diagram → evidence (daily counts, start date) → **how to reproduce and verify** (environment table, numbered steps with what they should see, expected-results table, pass criteria, attachments; `references/repro-kit.md`) → impact assessment (data, business, exposure, performance) → what we did locally → suggested fix → asks → appendix A (the reproduction script) → appendix B (scripts, raw output).
 
 ### Health / hour-over-hour report
 Verdict paragraph → key metrics (week ago / baseline / today / change) → hourly table and chart → integrations table (CPU, reads, execs, timeouts, errors, vs week ago) → resources with verdicts → what was fixed since the comparison day → ranked candidates (today's CPU, fix, owner, status, est. saving/day) → settings to consider → bottom line.
