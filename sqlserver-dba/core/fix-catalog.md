@@ -122,7 +122,7 @@ When code can't reach a seek: a narrow index named with a site prefix (e.g. `MyC
 
 ## Proving the output is unchanged
 
-- Run patched / original / patched as read-only SELECTs (statement body only, its `INTO`/target removed) with `SET STATISTICS IO, TIME ON`; compare rows with `EXCEPT` both ways in the same batch, or compare counts plus a checksum (`CHECKSUM_AGG(BINARY_CHECKSUM(*))`).
+- Run patched / original / patched as read-only SELECTs (statement body only, its `INTO`/target removed, built by the rules in `core/safety.md`) with `SET STATISTICS IO, TIME ON`. Compare them as multisets, not sets: `EXCEPT` ignores duplicates, so a rewrite that returns a row twice (an OR split into `UNION ALL`, say) still shows 0 and 0. Compare the row counts too, and compare `GROUP BY` all columns with `COUNT(*)` both ways, or the counts plus a checksum (`CHECKSUM_AGG(BINARY_CHECKSUM(*))`).
 - Run the patched version first and last: a row that becomes "due" between runs is timing, not a difference.
 - For statements that write, the parity script writes only to the session's own `#temp` copy of the target and is DBA-run.
 - Look for ties in `ROW_NUMBER() ... ORDER BY` that the vendor left non-deterministic: a hint can legitimately change which tied row wins. Say so if you find one.

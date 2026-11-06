@@ -27,20 +27,40 @@ DECLARE @BeforeFrom datetime      = NULL,   -- local; NULL = same clock window a
         @Schema     nvarchar(128) = NULL,   -- e.g. N'app'; NULL = all
         @ObjectLike nvarchar(300) = NULL,   -- e.g. N'%Feed%' on the object name; NULL = all
         @MinExecs   int           = 100,    -- minimum executions after, for the per-execution comparison
-        @TopN       int           = 25;
+        @TopN       int           = 25,
+        @TimeZone   sysname       = NULL;   -- the site profile's Windows zone name (sys.time_zone_info), e.g.
+                                            -- N'Central Standard Time'. NULL = the server's current UTC offset for
+                                            -- every date (an hour off for a window across a daylight-saving change).
 ---------------------------------------------------------------------------------------------------------------------
 
+IF @TimeZone IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.time_zone_info WHERE name = @TimeZone)
+    RAISERROR(N'@TimeZone "%s" is not in sys.time_zone_info: use a Windows time zone name, or NULL.', 16, 1, @TimeZone);
 DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());
-SET @AfterTo    = ISNULL(@AfterTo, GETDATE());
+SET @AfterTo    = ISNULL(@AfterTo, CASE WHEN @TimeZone IS NULL THEN GETDATE()
+                                        ELSE CONVERT(datetime, (SYSUTCDATETIME() AT TIME ZONE 'UTC') AT TIME ZONE @TimeZone) END);
 SET @AfterFrom  = ISNULL(@AfterFrom, DATEADD(HOUR, -4, @AfterTo));
 SET @BeforeFrom = ISNULL(@BeforeFrom, DATEADD(DAY, -7, @AfterFrom));
 SET @BeforeTo   = ISNULL(@BeforeTo, DATEADD(DAY, -7, @AfterTo));
-DECLARE @b0 datetime = DATEADD(MINUTE, -@off, @BeforeFrom), @b1 datetime = DATEADD(MINUTE, -@off, @BeforeTo),
-        @a0 datetime = DATEADD(MINUTE, -@off, @AfterFrom),  @a1 datetime = DATEADD(MINUTE, -@off, @AfterTo);
+-- Local -> UTC, each date with its own offset
+DECLARE @b0 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @BeforeFrom) ELSE CONVERT(datetime, (@BeforeFrom AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END,
+        @b1 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @BeforeTo)   ELSE CONVERT(datetime, (@BeforeTo   AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END,
+        @a0 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @AfterFrom)  ELSE CONVERT(datetime, (@AfterFrom  AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END,
+        @a1 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @AfterTo)    ELSE CONVERT(datetime, (@AfterTo    AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END;
+-- Whole Query Store intervals only: windows start at an interval boundary and end at the last complete one, so the
+-- per-hour rates divide exactly the hours whose data is included (the running interval holds only part of its data).
+DECLARE @len int = (SELECT interval_length_minutes FROM sys.database_query_store_options);
+SET @a0 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', DATEADD(SECOND, @len * 60 - 1, @a0)) / @len) * @len, '20000101');
+SET @b0 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', DATEADD(SECOND, @len * 60 - 1, @b0)) / @len) * @len, '20000101');
+SET @a1 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', @a1) / @len) * @len, '20000101');
+SET @b1 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', @b1) / @len) * @len, '20000101');
+IF @a1 <= @a0 OR @b1 <= @b0 RAISERROR(N'A window holds no complete Query Store interval: widen it.', 10, 1);
 DECLARE @bh decimal(9,3) = DATEDIFF(SECOND, @b0, @b1) / 3600.0, @ah decimal(9,3) = DATEDIFF(SECOND, @a0, @a1) / 3600.0;
 
 SELECT CONVERT(varchar(16), @BeforeFrom, 120) AS before_from, CONVERT(varchar(16), @BeforeTo, 120) AS before_to, CAST(@bh AS decimal(7,2)) AS before_hours,
        CONVERT(varchar(16), @AfterFrom, 120) AS after_from, CONVERT(varchar(16), @AfterTo, 120) AS after_to, CAST(@ah AS decimal(7,2)) AS after_hours,
+       CONVERT(varchar(16), @b0, 120) + ' to ' + CONVERT(varchar(16), @b1, 120) AS before_used_utc,
+       CONVERT(varchar(16), @a0, 120) + ' to ' + CONVERT(varchar(16), @a1, 120) AS after_used_utc,
+       ISNULL(@TimeZone, N'server offset now') AS time_zone,
        ISNULL(@Schema, N'(all)') AS scope_schema, ISNULL(@ObjectLike, N'(all)') AS scope_object;
 
 -- 1. Statement-level aggregates for both windows (scoped), then: regressions

@@ -14,22 +14,40 @@ SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
 -- EDIT ME ---------------------------------------------------------------------------------------------------------
-DECLARE @Day         date = NULL,   -- local date; NULL = today (up to now)
-        @CompareDays int  = 7;
+DECLARE @Day         date    = NULL,   -- local date; NULL = today (up to the last complete Query Store interval)
+        @CompareDays int     = 7,
+        @TimeZone    sysname = NULL;   -- the site profile's Windows zone name (sys.time_zone_info), e.g.
+                                       -- N'Central Standard Time'. NULL = the server's current UTC offset for every
+                                       -- date, which is an hour off for a day across a daylight-saving change.
 ---------------------------------------------------------------------------------------------------------------------
 
+IF @TimeZone IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.time_zone_info WHERE name = @TimeZone)
+    RAISERROR(N'@TimeZone "%s" is not in sys.time_zone_info: use a Windows time zone name, or NULL.', 16, 1, @TimeZone);
 DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());
-SET @Day = ISNULL(@Day, CAST(GETDATE() AS date));
-DECLARE @d0 datetime = DATEADD(MINUTE, -@off, CAST(@Day AS datetime));                    -- day start, UTC
-DECLARE @d1 datetime = CASE WHEN DATEADD(DAY, 1, @d0) > GETUTCDATE() THEN GETUTCDATE() ELSE DATEADD(DAY, 1, @d0) END;
-DECLARE @c0 datetime = DATEADD(DAY, -@CompareDays, @d0), @c1 datetime = DATEADD(DAY, -@CompareDays, @d1);
-SELECT CONVERT(varchar(10), @Day, 120) AS day_local, CONVERT(varchar(16), DATEADD(MINUTE, @off, @d1), 120) AS through_local,
-       CONVERT(varchar(10), DATEADD(DAY, -@CompareDays, @Day), 120) AS compare_day;
+SET @Day = ISNULL(@Day, CASE WHEN @TimeZone IS NULL THEN CAST(GETDATE() AS date)
+                             ELSE CAST((SYSUTCDATETIME() AT TIME ZONE 'UTC') AT TIME ZONE @TimeZone AS date) END);
+DECLARE @cDay date = DATEADD(DAY, -@CompareDays, @Day);
+-- Each day's local midnight in UTC, with its own date's offset
+DECLARE @d0 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, CAST(@Day AS datetime))
+                            ELSE CONVERT(datetime, (CAST(@Day AS datetime) AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END;
+DECLARE @dN datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(DAY, 1, @d0)
+                            ELSE CONVERT(datetime, (CAST(DATEADD(DAY, 1, @Day) AS datetime) AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END;
+DECLARE @c0 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, CAST(@cDay AS datetime))
+                            ELSE CONVERT(datetime, (CAST(@cDay AS datetime) AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END;
+-- The day ends at the next local midnight or, today, at the last complete Query Store interval (the running one holds
+-- only part of its data). The comparison day covers the same number of hours from its own midnight.
+DECLARE @len int = (SELECT interval_length_minutes FROM sys.database_query_store_options);
+DECLARE @lastComplete datetime = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', GETUTCDATE()) / @len) * @len, '20000101');
+DECLARE @d1 datetime = CASE WHEN @dN > @lastComplete THEN @lastComplete ELSE @dN END;
+DECLARE @c1 datetime = DATEADD(MINUTE, DATEDIFF(MINUTE, @d0, @d1), @c0);
+SELECT CONVERT(varchar(10), @Day, 120) AS day_local, DATEDIFF(MINUTE, @d0, @d1) / 60.0 AS hours_compared,
+       CONVERT(varchar(10), @cDay, 120) AS compare_day, ISNULL(@TimeZone, N'server offset now') AS time_zone,
+       CONVERT(varchar(16), @d0, 120) AS day_starts_utc, CONVERT(varchar(16), @c0, 120) AS compare_starts_utc;
 
--- 1. Per hour: day vs comparison day
+-- 1. Per hour: day vs comparison day (hr = hours since that day's local midnight, i.e. the local clock hour)
 ;WITH r AS (
     SELECT CASE WHEN i.start_time >= @d0 THEN 'D' ELSE 'C' END AS win,
-           DATEPART(HOUR, DATEADD(MINUTE, @off, CAST(i.start_time AS datetime))) AS hr,
+           DATEDIFF(MINUTE, CASE WHEN i.start_time >= @d0 THEN @d0 ELSE @c0 END, CAST(i.start_time AS datetime)) / 60 AS hr,
            rs.execution_type, rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
            rs.avg_logical_io_reads * rs.count_executions AS reads
     FROM sys.query_store_runtime_stats rs
@@ -65,7 +83,7 @@ FROM r GROUP BY hr ORDER BY hr;
 ),
 r AS (
     SELECT g.grp, CASE WHEN i.start_time >= @d0 THEN 'D' ELSE 'C' END AS win,
-           DATEPART(HOUR, DATEADD(MINUTE, @off, CAST(i.start_time AS datetime))) AS hr,
+           DATEDIFF(MINUTE, CASE WHEN i.start_time >= @d0 THEN @d0 ELSE @c0 END, CAST(i.start_time AS datetime)) / 60 AS hr,
            rs.execution_type, rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
            rs.avg_logical_io_reads * rs.count_executions AS reads
     FROM sys.query_store_runtime_stats rs
@@ -109,7 +127,7 @@ s AS (
     WHERE i.start_time >= h.h0 AND i.start_time < DATEADD(HOUR, 1, h.h0)
     GROUP BY q.query_hash
 )
-SELECT TOP (10) (SELECT DATEPART(HOUR, DATEADD(MINUTE, @off, h0)) FROM h) AS busiest_hr, s.obj,
+SELECT TOP (10) (SELECT DATEDIFF(MINUTE, @d0, h0) / 60 FROM h) AS busiest_hr, s.obj,
        CONVERT(varchar(20), s.query_hash, 1) AS query_hash,
        CAST(s.cpu_us / 60e6 AS decimal(9,1)) AS cpu_min, s.execs,
        CAST(s.cpu_us / 1000.0 / NULLIF(s.execs, 0) AS decimal(12,2)) AS cpu_ms_per_exec,
@@ -119,14 +137,14 @@ FROM s JOIN sys.query_store_query_text t ON t.query_text_id = s.query_text_id
 ORDER BY s.cpu_us DESC;
 
 -- 4. Parallelism wait-minutes per hour (day vs comparison), then the top statements behind them on the day
-SELECT DATEPART(HOUR, DATEADD(MINUTE, @off, CAST(i.start_time AS datetime))) AS hr,
+SELECT DATEDIFF(MINUTE, CASE WHEN i.start_time >= @d0 THEN @d0 ELSE @c0 END, CAST(i.start_time AS datetime)) / 60 AS hr,
        CAST(SUM(CASE WHEN i.start_time >= @d0 THEN ws.total_query_wait_time_ms END) / 60000.0 AS decimal(9,1)) AS parallel_wait_min,
        CAST(SUM(CASE WHEN i.start_time < @d0 THEN ws.total_query_wait_time_ms END) / 60000.0 AS decimal(9,1)) AS parallel_wait_min_compare
 FROM sys.query_store_wait_stats ws
 JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = ws.runtime_stats_interval_id
 WHERE ws.wait_category_desc = N'Parallelism'
   AND ((i.start_time >= @d0 AND i.start_time < @d1) OR (i.start_time >= @c0 AND i.start_time < @c1))
-GROUP BY DATEPART(HOUR, DATEADD(MINUTE, @off, CAST(i.start_time AS datetime)))
+GROUP BY DATEDIFF(MINUTE, CASE WHEN i.start_time >= @d0 THEN @d0 ELSE @c0 END, CAST(i.start_time AS datetime)) / 60
 ORDER BY hr;
 
 SELECT TOP (10)

@@ -19,31 +19,47 @@
               example recreated by an upgrade) have '(old)'. See groups_default.sql.
     Needs   : SQL Server 2017+, Query Store on, VIEW DATABASE STATE (2022: VIEW DATABASE PERFORMANCE STATE).
     Run     : from the folder that holds the groups file (sqlcmd :r takes the bare name):
-              sqlcmd -S <server> -d <db> -E -I -y 0 -f 65001 -v BaselineDate=2026-10-16 GroupsFile=groups.sql
-                     -i dash_workload.sql -o workload.txt
+              sqlcmd -S <server> -d <db> -E -I -X -t 300 -y 0 -f 65001 -v BaselineDate=2026-10-16 GroupsFile=groups.sql
+                     TimeZone=<Windows_zone> -i dash_workload.sql -o workload.txt
+    Time    : TimeZone is a Windows name from sys.time_zone_info (the config's timeZone) with its spaces written as
+              underscores (sqlcmd -v values can't hold spaces reliably across shells), or none. Each window starts at
+              that zone's local midnight on its own date and its hours count from there, so a week ago and the baseline
+              line up hour for hour across daylight-saving changes. With none, the server's current UTC offset is used
+              for every date, and windows on the other side of a change are an hour off.
     Cost    : each statement reads Query Store once (no temp tables); a few seconds to a minute on a busy server.
-              Hours are mapped with today's UTC offset; across a DST change the comparison days shift by an hour.
 */
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET LOCK_TIMEOUT 10000;
 
 DECLARE @base date = TRY_CONVERT(date, '$(BaselineDate)');
-DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());                                   -- local minus UTC
-DECLARE @cS datetime2 = DATEADD(MINUTE, -@off, CAST(CAST(GETDATE() AS date) AS datetime2));     -- local midnight, in UTC
+DECLARE @tz sysname = NULLIF(NULLIF(REPLACE(N'$(TimeZone)', N'_', N' '), N''), N'none');   -- underscores stand for spaces
+IF @tz IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.time_zone_info WHERE name = @tz)
+    RAISERROR(N'TimeZone "%s" is not in sys.time_zone_info: use a Windows time zone name, or none.', 16, 1, @tz);
+DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());                                   -- server local minus UTC, now
+DECLARE @today date = CASE WHEN @tz IS NULL THEN CAST(GETDATE() AS date)
+                           ELSE CAST((SYSUTCDATETIME() AT TIME ZONE 'UTC') AT TIME ZONE @tz AS date) END;
+-- Local midnight of each window's own date, in UTC
+DECLARE @cS datetime2 = CASE WHEN @tz IS NULL THEN DATEADD(MINUTE, -@off, CAST(@today AS datetime2))
+                             ELSE CONVERT(datetime2, (CAST(@today AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END;
 DECLARE @hours int = DATEDIFF(MINUTE, @cS, SYSUTCDATETIME()) / 60;
 IF @hours < 1 SET @hours = 1;
-DECLARE @aS datetime2 = DATEADD(DAY, -7, @cS);
-DECLARE @bS datetime2 = CASE WHEN @base IS NULL THEN NULL ELSE DATEADD(MINUTE, -@off, CAST(@base AS datetime2)) END;
+DECLARE @aS datetime2 = CASE WHEN @tz IS NULL THEN DATEADD(DAY, -7, @cS)
+                             ELSE CONVERT(datetime2, (CAST(DATEADD(DAY, -7, @today) AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END;
+DECLARE @bS datetime2 = CASE WHEN @base IS NULL THEN NULL
+                             WHEN @tz IS NULL THEN DATEADD(MINUTE, -@off, CAST(@base AS datetime2))
+                             ELSE CONVERT(datetime2, (CAST(@base AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END;
 DECLARE @cSo datetimeoffset = CAST(@cS AS datetimeoffset), @cEo datetimeoffset = CAST(DATEADD(HOUR, @hours, @cS) AS datetimeoffset);
 DECLARE @aSo datetimeoffset = CAST(@aS AS datetimeoffset), @aEo datetimeoffset = CAST(DATEADD(HOUR, @hours, @aS) AS datetimeoffset);
 DECLARE @bSo datetimeoffset = CAST(@bS AS datetimeoffset), @bEo datetimeoffset = CAST(DATEADD(HOUR, @hours, @bS) AS datetimeoffset);
-DECLARE @dSo datetimeoffset = CAST(DATEADD(DAY, -14, @cS) AS datetimeoffset);
 
 -- 1. meta
-SELECT JSON_QUERY((SELECT DB_NAME() AS db, CONVERT(varchar(19), GETDATE(), 126) AS now_local, @off AS utc_offset_min, @hours AS hours,
-                          CONVERT(varchar(10), CAST(GETDATE() AS date), 126) AS day_c,
-                          CONVERT(varchar(10), DATEADD(DAY, -7, CAST(GETDATE() AS date)), 126) AS day_a,
+SELECT JSON_QUERY((SELECT DB_NAME() AS db,
+                          CONVERT(varchar(19), CASE WHEN @tz IS NULL THEN GETDATE()
+                                                    ELSE CONVERT(datetime, (SYSUTCDATETIME() AT TIME ZONE 'UTC') AT TIME ZONE @tz) END, 126) AS now_local,
+                          @off AS utc_offset_min, @tz AS time_zone, @hours AS hours,
+                          CONVERT(varchar(10), @today, 126) AS day_c,
+                          CONVERT(varchar(10), DATEADD(DAY, -7, @today), 126) AS day_a,
                           CONVERT(varchar(10), @base, 126) AS day_b,
                           o.actual_state_desc AS qs_state, o.current_storage_size_mb AS qs_used_mb, o.max_storage_size_mb AS qs_max_mb,
                           o.interval_length_minutes AS qs_interval_min
@@ -55,7 +71,9 @@ WITH iv AS (
     SELECT i.runtime_stats_interval_id AS id,
            CASE WHEN i.start_time >= @cSo AND i.start_time < @cEo THEN 'C'
                 WHEN i.start_time >= @aSo AND i.start_time < @aEo THEN 'A' ELSE 'B' END AS win,
-           DATEPART(HOUR, DATEADD(MINUTE, @off, i.start_time)) AS h
+           -- hours since the window's own local midnight, so hour N means the same clock hour in every window
+           DATEDIFF(MINUTE, CASE WHEN i.start_time >= @cSo AND i.start_time < @cEo THEN @cSo
+                                 WHEN i.start_time >= @aSo AND i.start_time < @aEo THEN @aSo ELSE @bSo END, i.start_time) / 60 AS h
     FROM sys.query_store_runtime_stats_interval i
     WHERE (i.start_time >= @cSo AND i.start_time < @cEo) OR (i.start_time >= @aSo AND i.start_time < @aEo)
        OR (i.start_time >= @bSo AND i.start_time < @bEo)
@@ -205,17 +223,30 @@ SELECT JSON_QUERY((SELECT category,
                    GROUP BY pw.obj ORDER BY SUM(CASE WHEN pw.win = 'C' THEN pw.ms END) DESC FOR JSON PATH)) AS parallel_objects
 FOR JSON PATH, ROOT('waits');
 
--- 5. daily: whole days, last 14 days (today is partial)
-SELECT CONVERT(varchar(10), CAST(DATEADD(MINUTE, @off, i.start_time) AS date), 126) AS day,
+-- 5. daily: whole local days, last 14 days (today is partial). The 15 day boundaries are computed once (each in its own
+--    date's offset), and intervals are matched to them, so no time-zone conversion runs per runtime-stats row.
+WITH d AS (
+    SELECT DATEADD(DAY, -n.k, @today) AS day_local
+    FROM (VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9), (10), (11), (12), (13), (14)) n (k)
+),
+b AS (
+    SELECT d.day_local,
+           CAST(CASE WHEN @tz IS NULL THEN DATEADD(MINUTE, -@off, CAST(d.day_local AS datetime2))
+                     ELSE CONVERT(datetime2, (CAST(d.day_local AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END AS datetimeoffset) AS s,
+           CAST(CASE WHEN @tz IS NULL THEN DATEADD(MINUTE, -@off, CAST(DATEADD(DAY, 1, d.day_local) AS datetime2))
+                     ELSE CONVERT(datetime2, (CAST(DATEADD(DAY, 1, d.day_local) AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END AS datetimeoffset) AS e
+    FROM d
+)
+SELECT CONVERT(varchar(10), b.day_local, 126) AS day,
        CAST(SUM(rs.avg_cpu_time * rs.count_executions) / 60e6 AS decimal(12,0)) AS cpu_min,
        CAST(SUM(rs.avg_logical_io_reads * rs.count_executions) * 8 / 1048576e0 AS decimal(12,0)) AS reads_gb,
        SUM(rs.count_executions) AS execs,
        SUM(CASE WHEN rs.execution_type = 3 THEN rs.count_executions ELSE 0 END) AS timeouts,
        SUM(CASE WHEN rs.execution_type = 4 THEN rs.count_executions ELSE 0 END) AS errors,
        COUNT(DISTINCT i.runtime_stats_interval_id) AS intervals
-FROM sys.query_store_runtime_stats rs
-JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
-WHERE i.start_time >= @dSo
-GROUP BY CAST(DATEADD(MINUTE, @off, i.start_time) AS date)
-ORDER BY CAST(DATEADD(MINUTE, @off, i.start_time) AS date)
+FROM b
+JOIN sys.query_store_runtime_stats_interval i ON i.start_time >= b.s AND i.start_time < b.e
+JOIN sys.query_store_runtime_stats rs ON rs.runtime_stats_interval_id = i.runtime_stats_interval_id
+GROUP BY b.day_local
+ORDER BY b.day_local
 FOR JSON PATH, ROOT('daily');

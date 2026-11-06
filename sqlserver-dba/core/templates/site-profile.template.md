@@ -9,7 +9,7 @@ Every sqlserver-dba skill reads this before its first server query (see `core/si
 | `<prod-listener>` | **PRODUCTION**, read-only for Claude | `<AppDb>` (main), `<OtherDb>` | SQL Server 20xx, n cores, n GB, AG with n replicas |
 | `<dev-server>` | Dev / test | | Claude may run read-only scripts; writes only if the user says so |
 
-- Time zone for reports: `<America/Chicago>`
+- Time zone for reports, as a Windows name from `sys.time_zone_info`: `<Central Standard Time>`. The scripts pass it to `AT TIME ZONE`, which does not accept IANA names such as `America/Chicago`, so each date gets its own daylight-saving offset
 - Query Store: interval `<60>` min, max size `<n>` MB, `max_plans_per_query` `<n>`, capture mode `<AUTO>`
 - Reading login lacks: `<VIEW ANY DATABASE / msdb / VIEW SERVER STATE>` (expect NULL names)
 - `system_health` event files: `<full path, e.g. D:\MSSQL\Log\system_health*.xel>` (they reach back about `<n>` hours)

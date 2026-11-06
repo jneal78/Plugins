@@ -6,7 +6,17 @@ The value of this work depends on trust: the DBA lets Claude look at production 
 
 - `SELECT` against DMVs, catalog views, Query Store views and (with `NOLOCK` / `READ UNCOMMITTED`, narrowly filtered) business tables.
 - `DECLARE`, `SET` session options, CTEs, `WAITFOR DELAY` (for a timed delta).
-- `SET STATISTICS IO, TIME ON` and `SET SHOWPLAN_XML ON` around a read-only `SELECT` version of a statement.
+- `SET STATISTICS IO, TIME ON` and `SET SHOWPLAN_XML ON` around a read-only `SELECT` version of a statement, built by the rules in the next section.
+
+## Running a SELECT version of an application statement
+
+Tuning and parity work runs copies of real statements as SELECTs. A SELECT is not harmless just because it doesn't write: copied as-is it keeps the original's locking hints and side effects, and the statements being tuned are by definition the expensive ones. Before running one on production:
+
+1. **Remove locking hints** that change the locks a read takes: `UPDLOCK`, `XLOCK`, `HOLDLOCK`, `SERIALIZABLE`, `REPEATABLEREAD`, `TABLOCK`, `TABLOCKX`, `PAGLOCK`, `READPAST`. A copied `WITH (UPDLOCK, HOLDLOCK)` scan holds update and range locks for the whole statement and blocks every writer on the table. **Keep** the hints that shape the plan you are testing: `FORCESEEK`, `INDEX(...)`, join hints and `OPTION (...)`. Remove the locking hints from every variant, so they stay comparable.
+2. **Remove side effects.** Drop the target, `INTO` and `OUTPUT` clauses. Replace `NEXT VALUE FOR` with a constant, because a SELECT still consumes sequence numbers. If the statement calls a function that isn't plain T-SQL (CLR, a wrapper around an extended procedure, anything that can send mail or call out), don't run it: use the estimated plan, or ask the DBA to test on a copy.
+3. **Cap your own impact.** Start the batch with `SET LOCK_TIMEOUT 5000; SET DEADLOCK_PRIORITY LOW;`, so the test gives up after 5 seconds of waiting for a lock and is always the deadlock victim, never the application. Keep the default isolation level, the same for every variant.
+4. **Estimate before you execute.** Read the estimated plan first (`SET SHOWPLAN_XML ON`, which executes nothing) and the statement's recent cost in Query Store. If one execution costs more than about 10 seconds or a few million reads, don't run it on production: say so, and test on a restored copy or ask the DBA.
+5. **Say what you're about to spend,** run at a quiet moment, and pass a sqlcmd timeout (`-t`) that covers the expected duration with margin.
 
 ## What Claude never runs on production
 

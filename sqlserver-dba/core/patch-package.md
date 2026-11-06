@@ -4,7 +4,7 @@ A patch to vendor code is only as good as its deploy and its way back. Every pat
 
 | File | Purpose | Who runs it |
 |---|---|---|
-| `<obj>_original_rollback.sql` | The **live** definition, byte for byte, as `ALTER`, with the original `SET ANSI_NULLS` / `QUOTED_IDENTIFIER`. Restores the original hash exactly | DBA, only if needed |
+| `<obj>_original_rollback.sql` | Guarded rollback (below, from `ROLLBACK_TEMPLATE.sql`): STEP 0 refuses unless the live object is exactly our patched build, then the **live** definition, byte for byte, as `ALTER`, with the original `SET ANSI_NULLS` / `QUOTED_IDENTIFIER`. Restores the original hash exactly | DBA, only if needed |
 | `<obj>_patched.sql` | Live definition + the marked lines (reference copy) | — |
 | `DEPLOY_<obj>_LIVE.sql` | Guarded deploy (below) | DBA |
 | `Parity_<obj>_ReadOnly.sql` | Original vs patched statement, patched / original / patched, rows and cost compared | DBA (it writes to `#temp`) |
@@ -18,7 +18,7 @@ A patch to vendor code is only as good as its deploy and its way back. Every pat
 2. Record its SHA-256: `CONVERT(varchar(66), HASHBYTES('SHA2_256', OBJECT_DEFINITION(OBJECT_ID(N'schema.obj'))), 1)`. `HASHBYTES` input is unlimited from SQL Server 2016.
 3. Record `uses_ansi_nulls` and `uses_quoted_identifier` from `sys.sql_modules`; the rollback and deploy must set them the same.
 4. Make the change with a marker comment on each changed line: `-- MyCo 2026-10-28: <why>`. Keep the change as small as possible.
-5. Build the rollback by turning `CREATE` into `ALTER` and nothing else. SQL Server stores `ALTER` text as `CREATE`, so applying the rollback restores the original hash exactly. Rehearse that on a scratch database (LocalDB is fine): create original → hash, deploy patch → hash, rollback → hash equals the original.
+5. Build the rollback's object text by turning `CREATE` into `ALTER` and nothing else. SQL Server stores `ALTER` text as `CREATE`, so applying the rollback restores the original hash exactly. Wrap it in the guard from `ROLLBACK_TEMPLATE.sql` (head + object text + tail, concatenated, never edited by hand). Rehearse on a scratch database (LocalDB is fine): create original → hash, deploy patch → hash, rollback → hash equals the original; then run the rollback again and check that STEP 0 stops it ("already the original").
 6. Compute the patched hash after a rehearsal deploy and put both hashes in the README and the Verify script.
 
 ### Byte-exact text: the traps
@@ -56,11 +56,27 @@ Why each guard exists: a hash check prevents overwriting a vendor change you hav
 
 **Deploy window:** for a scheduled procedure, list when it runs and how long it takes and name a gap. For a hot procedure, deploy at low traffic; `ALTER` waits for a schema lock, hence `LOCK_TIMEOUT`.
 
+## The guarded rollback (STEP 0 must stop it, too)
+
+A rollback is run rarely, often months later and under pressure, when nobody remembers what changed since. By then a vendor upgrade may have replaced the object; restoring "the original" would overwrite the vendor's new code with the pre-upgrade text. So the rollback has its own STEP 0 (`ROLLBACK_TEMPLATE.sql`):
+
+```
+  wrong database / object not found
+  hash = original                             -> "Already the original - nothing to do"
+  hash <> patched build and no marker         -> "Neither our patch nor the original (vendor upgrade?) - review instead"
+  marker present but hash <> patched build    -> stop unless @AllowMarkedVariant = 1 after a review
+  running right now / plan guide / signed     -> as in the deploy
+-- STEP 1: SET options as the original; the original text with CREATE -> ALTER, byte for byte
+-- STEP 2: confirm the hash equals the original; grants after
+```
+
+Put both hashes (original and patched as deployed) in it. If the DBA deployed a slightly different text (a dropped header, say), record that deployed hash as `@patched` after the deploy.
+
 ## The parity test
 
 - Copy the procedure's exact statement twice (original and patched). If it writes to a `#temp` table, create the same `#temp` in the test session and write there. Nothing else in the procedure runs: no real tables change, nothing is sent.
 - Capture CPU and reads per run from `sys.dm_exec_requests` for `@@SPID` before/after (and `SET STATISTICS TIME ON` for exact CPU including parallel workers).
-- Compare rows with `EXCEPT` in both directions. Pass = 0 rows only-original and 0 only-patched against at least one patched run.
+- Compare rows as multisets, not sets. `EXCEPT` removes duplicates, so a patch that returns a row twice passes an `EXCEPT` test. Pass = the same row count, and 0 rows in both directions when each side is grouped by all its columns with `COUNT(*)` (a row that appears twice on one side and once on the other then shows up), against at least one patched run.
 - If Claude already measured it as read-only SELECTs, put those numbers in the header so the DBA knows what to expect.
 
 ## The verify script

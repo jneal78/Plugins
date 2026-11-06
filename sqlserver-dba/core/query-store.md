@@ -20,14 +20,23 @@ sys.query_store_wait_stats ws                   ON ws.plan_id = p.plan_id AND ws
 
 ## Time
 
+Query Store stores interval times in UTC. Convert each local date with **its own** offset, from the site profile's Windows time zone name (`sys.time_zone_info`, e.g. `Central Standard Time`; `AT TIME ZONE` does not accept IANA names such as `America/Chicago`):
+
 ```sql
-DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());                          -- local minus UTC
-DECLARE @d0 datetime = DATEADD(MINUTE, -@off, CAST(CAST(GETDATE() AS date) AS datetime)); -- today 00:00 local, in UTC
--- local hour of an interval:
-DATEPART(HOUR, DATEADD(MINUTE, @off, i.start_time))
+DECLARE @tz sysname = N'Central Standard Time';                                       -- from the site profile
+-- a local date's midnight, in UTC (DST-correct for that date):
+DECLARE @d0 datetime2 = CONVERT(datetime2, (CAST(@day AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC');
+-- local clock hour of an interval inside a window that starts at local midnight @d0:
+DATEDIFF(MINUTE, @d0, CAST(i.start_time AS datetime2)) / 60
+-- local time of an interval, for display:
+CONVERT(datetime2, i.start_time AT TIME ZONE @tz)
 ```
 
-Compare a window with the same clock hours 7 days earlier (`DATEADD(DAY, -7, ...)`), and with a baseline day. Exclude the hour a change was deployed in ("mixed hour"), and when the current hour is partial, divide by the elapsed hours, not 1.
+**Don't** apply today's offset (`DATEDIFF(MINUTE, GETUTCDATE(), GETDATE())`) to past dates. For a week after each daylight-saving change, "the same hours a week ago" is then an hour off, and a baseline day from the other half of the year stays an hour off for months. The scripts that compare windows (health check, dashboard, hotspots 02–04) take the zone name and fall back to today's offset only when none is given. Scripts that only label recent days in local time (05, 08, 09, 16) still use today's offset; their oldest days can show an hour shifted across a change.
+
+`AT TIME ZONE` costs CPU per call. Convert a handful of window bounds (or one row per day) and compare `i.start_time` with them; don't convert every runtime-stats row.
+
+Compare a window with the same clock hours 7 days earlier, and with a baseline day. Exclude the hour a change was deployed in ("mixed hour"). Use **whole intervals only**: the interval running now holds only part of its data, so a window that ends "now" compared with a full window a week ago understates the current one (by up to a quarter of an hour's worth on a 4-hour window). End windows at the last complete interval boundary (`interval_length_minutes` from `sys.database_query_store_options`) and divide by the hours actually included.
 
 ## Gotchas that change conclusions
 

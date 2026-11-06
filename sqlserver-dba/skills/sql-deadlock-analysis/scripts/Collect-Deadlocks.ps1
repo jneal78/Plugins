@@ -29,7 +29,7 @@ $prefix = if ((Split-Path $Script -Leaf) -like '15*') { 'graphs_ring_' } else { 
 
 for ($i = 1; $i -le $Runs; $i++) {
     $out = Join-Path $OutDir ($prefix + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json')
-    & sqlcmd -S $Server -d master -E -I -y 0 -f 65001 -t $TimeoutSeconds -i $Script -o $out
+    & sqlcmd -S $Server -d master -E -I -X -y 0 -f 65001 -t $TimeoutSeconds -i $Script -o $out
     $code = $LASTEXITCODE
     $n = if (Test-Path $out) { ([regex]::Matches([IO.File]::ReadAllText($out), '"graph"')).Count } else { 0 }
     Write-Output ('{0:yyyy-MM-dd HH:mm} run {1}/{2}: exit {3}, {4} graphs held by the session' -f (Get-Date), $i, $Runs, $code, $n)

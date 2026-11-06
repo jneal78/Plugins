@@ -18,18 +18,39 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 DECLARE @From        datetime = NULL,   -- local time; NULL = today 00:00
         @To          datetime = NULL,   -- local time; NULL = now
         @CompareDays int      = 7,      -- comparison window = same clock window this many days earlier
-        @TopN        int      = 25;
+        @TopN        int      = 25,
+        @TimeZone    sysname  = NULL;   -- the site profile's Windows zone name (sys.time_zone_info), e.g.
+                                        -- N'Central Standard Time'. NULL = the server's current UTC offset for every
+                                        -- date, which is an hour off for a window across a daylight-saving change.
 ---------------------------------------------------------------------------------------------------------------------
 
+IF @TimeZone IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.time_zone_info WHERE name = @TimeZone)
+    RAISERROR(N'@TimeZone "%s" is not in sys.time_zone_info: use a Windows time zone name, or NULL.', 16, 1, @TimeZone);
 DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());
-SET @From = ISNULL(@From, CAST(CAST(GETDATE() AS date) AS datetime));
-SET @To   = ISNULL(@To, GETDATE());
-DECLARE @a0 datetime = DATEADD(MINUTE, -@off, @From), @a1 datetime = DATEADD(MINUTE, -@off, @To);   -- UTC
-DECLARE @b0 datetime = DATEADD(DAY, -@CompareDays, @a0), @b1 datetime = DATEADD(DAY, -@CompareDays, @a1);
-DECLARE @hours decimal(9,3) = DATEDIFF(SECOND, @a0, @a1) / 3600.0;
+DECLARE @nowLocal datetime = CASE WHEN @TimeZone IS NULL THEN GETDATE()
+                                  ELSE CONVERT(datetime, (SYSUTCDATETIME() AT TIME ZONE 'UTC') AT TIME ZONE @TimeZone) END;
+SET @From = ISNULL(@From, CAST(CAST(@nowLocal AS date) AS datetime));
+SET @To   = ISNULL(@To, @nowLocal);
+-- Local -> UTC, each date with its own offset (so the comparison window is the same clock hours on its own day)
+DECLARE @bFrom datetime = DATEADD(DAY, -@CompareDays, @From), @bTo datetime = DATEADD(DAY, -@CompareDays, @To);
+DECLARE @a0 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @From) ELSE CONVERT(datetime, (@From AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END,
+        @a1 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @To)   ELSE CONVERT(datetime, (@To   AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END,
+        @b0 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @bFrom) ELSE CONVERT(datetime, (@bFrom AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END,
+        @b1 datetime = CASE WHEN @TimeZone IS NULL THEN DATEADD(MINUTE, -@off, @bTo)   ELSE CONVERT(datetime, (@bTo   AT TIME ZONE @TimeZone) AT TIME ZONE 'UTC') END;
+-- Whole Query Store intervals only: each window starts at an interval boundary and ends at the last complete one. The
+-- interval running now holds only part of its data, so including it would compare a partial hour with a full one.
+DECLARE @len int = (SELECT interval_length_minutes FROM sys.database_query_store_options);
+SET @a0 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', DATEADD(SECOND, @len * 60 - 1, @a0)) / @len) * @len, '20000101');
+SET @b0 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', DATEADD(SECOND, @len * 60 - 1, @b0)) / @len) * @len, '20000101');
+SET @a1 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', @a1) / @len) * @len, '20000101');
+SET @b1 = DATEADD(MINUTE, (DATEDIFF(MINUTE, '20000101', @b1) / @len) * @len, '20000101');
+IF @a1 <= @a0 RAISERROR(N'The window holds no complete Query Store interval yet: widen it or wait.', 10, 1);
+DECLARE @hours decimal(9,3) = DATEDIFF(SECOND, @a0, @a1) / 3600.0, @hoursB decimal(9,3) = DATEDIFF(SECOND, @b0, @b1) / 3600.0;
 
 SELECT CONVERT(varchar(16), @From, 120) AS window_from_local, CONVERT(varchar(16), @To, 120) AS window_to_local,
-       CAST(@hours AS decimal(7,2)) AS hours, @CompareDays AS compare_days_back,
+       CONVERT(varchar(16), @a0, 120) AS used_from_utc, CONVERT(varchar(16), @a1, 120) AS used_to_utc,
+       CAST(@hours AS decimal(7,2)) AS hours, CAST(@hoursB AS decimal(7,2)) AS compare_hours, @CompareDays AS compare_days_back,
+       ISNULL(@TimeZone, N'server offset now') AS time_zone,
        (SELECT TOP (1) DATEDIFF(MINUTE, start_time, end_time) FROM sys.query_store_runtime_stats_interval
         ORDER BY runtime_stats_interval_id DESC) AS qs_interval_min,
        (SELECT CONVERT(varchar(16), DATEADD(MINUTE, @off, CAST(MIN(start_time) AS datetime)), 120) FROM sys.query_store_runtime_stats_interval) AS qs_history_starts_local;
@@ -45,7 +66,7 @@ SELECT CONVERT(varchar(16), @From, 120) AS window_from_local, CONVERT(varchar(16
 )
 SELECT CASE win WHEN 'A' THEN 'window' ELSE 'compare' END AS period,
        CAST(SUM(cpu_us) / 60e6 AS decimal(12,1)) AS cpu_min,
-       CAST(SUM(cpu_us) / 60e6 / NULLIF(@hours, 0) / 60 AS decimal(6,2)) AS cores_busy_avg,
+       CAST(SUM(cpu_us) / 60e6 / NULLIF(CASE win WHEN 'A' THEN @hours ELSE @hoursB END, 0) / 60 AS decimal(6,2)) AS cores_busy_avg,
        CAST(SUM(reads) * 8 / 1048576.0 AS decimal(12,1)) AS reads_gb,
        CAST(SUM(dur_us) / 60e6 AS decimal(12,1)) AS duration_min,
        SUM(execs) AS stmt_execs,

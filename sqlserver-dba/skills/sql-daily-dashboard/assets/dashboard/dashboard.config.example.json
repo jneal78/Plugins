@@ -4,6 +4,8 @@
   "environment": "Production (read-only)",
   "baselineDate": "2026-01-15",
   "baselineNote": "A known-good, steady day",
+  "timeZone": "Eastern Standard Time",
+  "queryTimeoutSeconds": 300,
   "topN": 30,
   "databases": [
     { "name": "YourMainDb", "groups": "groups_yoursite.sql", "main": true },

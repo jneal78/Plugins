@@ -5,7 +5,9 @@
   Nothing else in the object runs: no real table changes, nothing is sent.
 
   When : <a quiet moment / between scheduled runs>. The original costs about <n> s CPU (one extra run of the slow version).
-  Pass : rows_only_original = 0 and rows_only_patched = 0 against at least one of the two patched runs.
+  Pass : same row_count, and rows_only_original = 0 and rows_only_patched = 0, against at least one of the two patched
+         runs. Rows are compared as multisets (grouped with their count), so a patch that returns a row twice fails;
+         a plain EXCEPT would pass it.
          Rows that become "due" between runs are timing, not a difference: re-run if in doubt.
   Measured by Claude as read-only SELECTs on <date>: patched <n> ms CPU / original <n> ms / patched <n> ms; <n> rows, identical.
 =====================================================================================================================*/
@@ -63,8 +65,16 @@ GO
 
 /*--- results ----------------------------------------------------------------------------------------------*/
 SELECT * FROM #runs ORDER BY run_no
+-- Multiset comparison: each side grouped by all its columns with the number of copies, then EXCEPT both ways.
+-- A row present twice on one side and once on the other differs in its count, so it is reported.
 SELECT p.run_no AS patched_run,
-       (SELECT COUNT(*) FROM (SELECT k, v FROM #res WHERE run_no = 2 EXCEPT SELECT k, v FROM #res WHERE run_no = p.run_no) x) AS rows_only_original,
-       (SELECT COUNT(*) FROM (SELECT k, v FROM #res WHERE run_no = p.run_no EXCEPT SELECT k, v FROM #res WHERE run_no = 2) x) AS rows_only_patched
+       (SELECT COUNT(*) FROM #res WHERE run_no = 2) AS original_row_count,
+       (SELECT COUNT(*) FROM #res WHERE run_no = p.run_no) AS patched_row_count,
+       (SELECT COUNT(*) FROM (SELECT k, v, COUNT(*) AS copies FROM #res WHERE run_no = 2 GROUP BY k, v
+                              EXCEPT
+                              SELECT k, v, COUNT(*) FROM #res WHERE run_no = p.run_no GROUP BY k, v) x) AS rows_only_original,
+       (SELECT COUNT(*) FROM (SELECT k, v, COUNT(*) AS copies FROM #res WHERE run_no = p.run_no GROUP BY k, v
+                              EXCEPT
+                              SELECT k, v, COUNT(*) FROM #res WHERE run_no = 2 GROUP BY k, v) x) AS rows_only_patched
 FROM (SELECT DISTINCT run_no FROM #runs WHERE version = 'patched') p
 GO

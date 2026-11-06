@@ -22,9 +22,9 @@ The shared core is at `../../core/` from this skill's folder.
 | 2. Cost by statement | Which statement, which plan, since when, waits | `scripts/05_qs_object_profile.sql` | `references/procedure-analysis.md` §2 |
 | 3. Read the plan | Which operator, which table and index, rows read vs returned | `scripts/06_plan_operators.sql`, `scripts/10_implicit_conversions.sql`, `scripts/12_missing_indexes.sql` | `references/procedure-analysis.md` §3, `core/fix-catalog.md` |
 | 4. Understand the data | Row counts, skew, placeholder values, tables that only grow | (ad hoc read-only queries) | `references/procedure-analysis.md` §4 |
-| 5. Design and prove the fix | 2–4 variants as read-only SELECTs; rows and cost each | `core/templates/patch/Parity_TEMPLATE.sql` | `core/fix-catalog.md` (proving the output is unchanged) |
+| 5. Design and prove the fix | 2–4 variants as SELECTs you write yourself, built by the rules in `core/safety.md` (locking hints and side effects removed, lock timeout, estimate first); rows and cost each | (ad hoc read-only queries) | `core/safety.md` ("Running a SELECT version"), `core/fix-catalog.md` (proving the output is unchanged) |
 | 6. Benchmark live | Before/after counters on the live system | `scripts/07_live_delta_benchmark.sql` | `core/query-store.md` (timed delta) |
-| 7. Package | Guarded deploy, exact rollback, verify, README, vendor note | `core/templates/patch/` | `core/patch-package.md` |
+| 7. Package | Guarded deploy, guarded exact rollback, parity test for the DBA (`Parity_TEMPLATE.sql` writes to `#temp`, so Claude never runs it), verify, README, vendor note | `core/templates/patch/` | `core/patch-package.md` |
 
 ## The rules that matter most
 
@@ -35,7 +35,7 @@ The shared core is at `../../core/` from this skill's folder.
   3. a narrow, site-prefixed index when nothing in the code can reach a seek;
   4. server settings, framed as the DBA's call, after the big scanners are fixed.
   Query Store plan forcing and hints follow the site's policy (`core/safety.md`; default: code first, forcing only with approval).
-- **Keep the SELECT list, joins and predicates identical** unless the fix *is* a logic correction. Prove row parity: patched / original / patched, `EXCEPT` both ways. Look for non-deterministic ties a hint could legitimately change, and say so.
+- **Keep the SELECT list, joins and predicates identical** unless the fix *is* a logic correction. Prove row parity: patched / original / patched, compared as multisets (row counts plus `GROUP BY` all columns with `COUNT(*)` both ways; `EXCEPT` alone misses duplicated rows). Look for non-deterministic ties a hint could legitimately change, and say so.
 - **Measure variants, keep the losers.** A table of variants tried (CPU, reads, rows) goes in the write-up: it shows the vendor what doesn't work.
 - **Read-only proof only.** If the statement writes, the parity test writes to the session's own `#temp` copy and is a script for the DBA to run.
 - **A hint has a dependency.** `FORCESEEK` with no usable index raises error 8622. Name the index the fix relies on in the README.

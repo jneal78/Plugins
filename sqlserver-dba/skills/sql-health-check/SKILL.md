@@ -40,10 +40,14 @@ Per second: batch requests, transactions (for the current database), compiles an
 ## 3. Workload: today vs a week ago vs the baseline
 
 ```bash
-sqlcmd -S <server> -d <AppDb> -E -I -W -s"|" -t 300 -v BaselineDate=<yyyy-mm-dd> -i "<skill-dir>\scripts\health_workload.sql"
+sqlcmd -S <server> -d <AppDb> -E -I -W -s"|" -t 300 -v BaselineDate=<yyyy-mm-dd> TimeZone=<Windows_zone> -i "<skill-dir>\scripts\health_workload.sql"
 ```
 
-Run it once per database worth comparing. Window: local midnight to the last complete hour, against the same clock hours 7 days ago (`_a`) and on the baseline day (`_b`). Output: CPU, reads and timeouts by hour; totals per window with average cores busy; waits by category; the top 30 objects with their week-ago and baseline figures; the biggest movers. No baseline in the profile yet? Run without one, then suggest a steady day from the data and confirm it with the user.
+Run it once per database worth comparing. Window: local midnight to the last complete hour, against the same clock hours 7 days ago (`_a`) and on the baseline day (`_b`). Output: CPU, reads and timeouts by hour; totals per window with average cores busy; waits by category; the top 30 objects with their week-ago and baseline figures; the biggest movers.
+
+Both variables are required by sqlcmd:
+- `TimeZone` is the profile's Windows time zone name (`sys.time_zone_info`) with spaces written as underscores, e.g. `TimeZone=Central_Standard_Time` (a sqlcmd `-v` value with spaces breaks in some shells). Each window then starts at its own date's local midnight, so comparisons stay aligned across daylight-saving changes. `TimeZone=none` falls back to the server's current offset, which is an hour off for days on the other side of a change; say so if you use it.
+- `BaselineDate=none` when the profile has no baseline yet: run without one, then suggest a steady day from the data and confirm it with the user.
 
 ## 4. Interpret and rank
 

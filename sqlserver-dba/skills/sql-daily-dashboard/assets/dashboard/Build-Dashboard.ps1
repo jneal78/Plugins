@@ -4,8 +4,9 @@
     the site's findings ledger, and renders one self-contained HTML page (plus the data as JSON).
 
 .DESCRIPTION
-    Every SQL file it runs is SELECT-only (dash_server.sql, dash_workload.sql, and any "extra" files in the config).
-    Nothing is changed on the server. The page has no server connection: it is a snapshot you can open, mail or archive.
+    Every SQL file it runs is SELECT-only: dash_server.sql and dash_workload.sql, and the site's groups and "extra" files,
+    which tools/Test-ReadOnlyScripts.ps1 checks before anything connects (the run stops if they fail). Every query has a
+    timeout (config queryTimeoutSeconds, default 300) and sqlcmd runs with -X. Nothing is changed on the server. The page has no server connection: it is a snapshot you can open, mail or archive.
 
     Output (in the config's outDir):
         Dashboard_<yyyy-MM-dd_HHmm>.html   this run's page (each run keeps its own; same minute replaces)
@@ -47,6 +48,7 @@ function Resolve-CfgPath([string]$p) {
     return (Join-Path $cfgDir $p)
 }
 
+$queryTimeout = if ($cfg.queryTimeoutSeconds) { [int]$cfg.queryTimeoutSeconds } else { 300 }
 $outDir  = Resolve-CfgPath $(if ($cfg.outDir) { $cfg.outDir } else { 'out' })
 $dataDir = Join-Path $outDir 'data'
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
@@ -58,7 +60,9 @@ function Get-SqlJson([string]$Database, [string]$SqlFile, [hashtable]$Vars) {
     # mixes in "Warning: Null value is eliminated..." lines. Join the data lines, cut the stream back to objects
     # by brace depth (outside strings), then combine the objects.
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("dash_" + [guid]::NewGuid().ToString('N') + ".json")
-    $argv = @('-S', $cfg.server, '-d', $Database, '-E', '-I', '-b', '-y', '0', '-f', '65001', '-i', $SqlFile, '-o', $tmp)
+    # -t: every query has a timeout, so a bad plan is cancelled instead of running on. -X: sqlcmd's shell-command and
+    # editor commands are disabled, whatever a site file contains (the reviewed :r include still works).
+    $argv = @('-S', $cfg.server, '-d', $Database, '-E', '-I', '-b', '-X', '-t', [string]$queryTimeout, '-y', '0', '-f', '65001', '-i', $SqlFile, '-o', $tmp)
     if ($Vars) { foreach ($k in $Vars.Keys) { $argv += @('-v', "$k=$($Vars[$k])") } }
     $sw = [Diagnostics.Stopwatch]::StartNew()
     & sqlcmd @argv
@@ -134,6 +138,18 @@ if ($FromJson) {
     if ($stamp -notmatch '^\d{4}-\d{2}-\d{2}(_\d{4})?$') { $stamp = Get-Date -Format 'yyyy-MM-dd_HHmm' }
 } else {
     $here = $PSScriptRoot
+    # The site's own SQL (groups files, business metrics) runs on the server too, so it gets the same read-only check
+    # as the bundled scripts before anything connects. The checker lives in the plugin's tools folder.
+    $siteSql = @(@($cfg.databases | ForEach-Object { Resolve-CfgPath $_.groups }) + @(@($cfg.extra) | Where-Object { $_ } | ForEach-Object { Resolve-CfgPath $_.sql }) | Where-Object { $_ })
+    $checker = Join-Path $here '..\..\..\..\tools\Test-ReadOnlyScripts.ps1'
+    if ($siteSql) {
+        if (Test-Path $checker) {
+            $report = & pwsh -NoProfile -File $checker -Path ($siteSql -join ';') 2>&1
+            if ($LASTEXITCODE -ne 0) { throw ("The site's SQL files failed the read-only check; nothing was run.`n" + ($report | Out-String)) }
+        } else {
+            Write-Warning "Read-only checker not found at ${checker}: the site's SQL files were not checked."
+        }
+    }
     Write-Host "Collecting from $($cfg.server) (read-only)"
     $main = @($cfg.databases | Where-Object { $_.main })[0]
     if (-not $main) { $main = @($cfg.databases)[0] }
@@ -144,7 +160,8 @@ if ($FromJson) {
         $groups = Resolve-CfgPath $db.groups
         if (-not $groups) { $groups = Join-Path $here 'groups_default.sql' }
         # sqlcmd won't take a drive path in -v, so :r gets the bare file name and runs from the file's folder
-        $vars = @{ BaselineDate = $cfg.baselineDate; TopN = $(if ($cfg.topN) { $cfg.topN } else { 30 }); GroupsFile = (Split-Path $groups -Leaf) }
+        $vars = @{ BaselineDate = $(if ($cfg.baselineDate) { $cfg.baselineDate } else { 'none' }); TopN = $(if ($cfg.topN) { $cfg.topN } else { 30 })
+                   GroupsFile = (Split-Path $groups -Leaf); TimeZone = $(if ($cfg.timeZone) { $cfg.timeZone -replace ' ', '_' } else { 'none' }) }
         Push-Location (Split-Path (Resolve-Path $groups).Path)
         try { $dbJson += Get-SqlJson $db.name (Join-Path $here 'dash_workload.sql') $vars } finally { Pop-Location }
     }

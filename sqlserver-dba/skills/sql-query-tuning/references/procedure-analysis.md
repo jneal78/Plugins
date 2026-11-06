@@ -34,7 +34,7 @@ Look for these, in roughly this order of payoff:
 | Scalar UDF or multi-statement TVF called per row | The function's cost × rows; shows up as the function's own statements in Query Store |
 | DOP 8 on a statement returning 30 rows | Huge input for a tiny output: fix the access path, not MAXDOP |
 
-Estimated plan for a statement you can run as a SELECT: `SET SHOWPLAN_XML ON` then the statement — read-only, nothing executes. Actual cost: run it as a `SELECT` with `SET STATISTICS IO, TIME ON` (read-only) at a quiet moment, and only if the cost is acceptable on production (state the CPU you're about to spend).
+Estimated plan for a statement you can run as a SELECT: `SET SHOWPLAN_XML ON` then the statement — read-only, nothing executes. Actual cost: run it as a `SELECT` with `SET STATISTICS IO, TIME ON`, built and capped by the rules in `core/safety.md` ("Running a SELECT version of an application statement": locking hints and side effects removed, `LOCK_TIMEOUT` and `DEADLOCK_PRIORITY LOW` set, estimated plan read first). Run it at a quiet moment, and only if the cost is acceptable on production; state the CPU you're about to spend.
 
 ## 4. Understand the data, not just the plan
 

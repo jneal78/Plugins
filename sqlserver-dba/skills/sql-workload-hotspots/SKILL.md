@@ -14,7 +14,7 @@ Everything here is read-only. A DBA runs anything that writes.
 The shared core is at `../../core/` from this skill's folder.
 1. **Find the site folder** (`core/site.md`): read `site-profile.md` (production servers, time zone, policies, workload groups, baseline day, normal noise) and the findings ledger. Don't rediscover a ledger item; report its status.
 2. **Read `core/safety.md`** the first time in a session. Short version: SELECT only, SQL in `.sql` files, `sqlcmd -t` always, never reword a blocked command.
-3. **Fix the windows up front:** today vs the same clock hours 7 days ago, and the profile's baseline day. For a deploy or upgrade, use explicit before / after windows and drop the mixed hour. Read `core/number-hygiene.md`.
+3. **Fix the windows up front:** today vs the same clock hours 7 days ago, and the profile's baseline day. For a deploy or upgrade, use explicit before / after windows and drop the mixed hour. Set `@TimeZone` in scripts 02–04 to the profile's Windows zone name, so each date gets its own daylight-saving offset. The scripts compare whole Query Store intervals only and print the UTC span they used. Read `core/number-hygiene.md` and `core/query-store.md` ("Time").
 
 ## Steps and scripts
 

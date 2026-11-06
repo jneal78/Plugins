@@ -2,26 +2,43 @@
     health_workload.sql - READ-ONLY workload comparison from Query Store (current database).
     Today (local midnight -> last complete hour) vs the same clock hours 7 days ago (A) and on a baseline date (B).
     SELECT-only: CTEs and derived tables, no temp tables. Run once per database:
-        sqlcmd -S <server> -d <AppDb>   -E -I -W -s"|" -v BaselineDate=<yyyy-mm-dd> -i health_workload.sql
-        sqlcmd -S <server> -d <OtherDb> -E -I -W -s"|" -v BaselineDate=<yyyy-mm-dd> -i health_workload.sql
-    BaselineDate = a known-good "steady state" day (yyyy-mm-dd). Columns: _a = a week ago, _b = baseline, _c = today.
+        sqlcmd -S <server> -d <AppDb>   -E -I -W -s"|" -t 300 -v BaselineDate=<yyyy-mm-dd> TimeZone=<Windows_zone> -i health_workload.sql
+        sqlcmd -S <server> -d <OtherDb> -E -I -W -s"|" -t 300 -v BaselineDate=<yyyy-mm-dd> TimeZone=<Windows_zone> -i health_workload.sql
+    BaselineDate = a known-good "steady state" day (yyyy-mm-dd), or none. Columns: _a = a week ago, _b = baseline, _c = today.
+    TimeZone     = the report time zone as a Windows name from sys.time_zone_info with its spaces written as underscores
+                   (Central_Standard_Time: sqlcmd -v values can't hold spaces reliably across shells), or none.
+                   Each window starts at that zone's local midnight on its own date, so a week ago and the baseline day
+                   line up hour for hour across daylight-saving changes. With none, the server's CURRENT offset from
+                   UTC is used for every date: windows on the other side of a daylight-saving change are an hour off.
+    Needs SQL Server 2017+ (sys.query_store_wait_stats in section 3).
 */
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
-DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());                     -- local minus UTC, minutes (e.g. -300 for CDT)
-DECLARE @cS datetime2 = DATEADD(MINUTE, -@off, CAST(CAST(GETDATE() AS date) AS datetime2));   -- today's local midnight, in UTC
+DECLARE @tz sysname = NULLIF(NULLIF(REPLACE(N'$(TimeZone)', N'_', N' '), N''), N'none');   -- underscores stand for spaces
+IF @tz IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.time_zone_info WHERE name = @tz)
+    RAISERROR(N'TimeZone "%s" is not in sys.time_zone_info: use a Windows time zone name, or none.', 16, 1, @tz);
+DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());                     -- server local minus UTC, now
+DECLARE @today date = CASE WHEN @tz IS NULL THEN CAST(GETDATE() AS date)
+                           ELSE CAST((SYSUTCDATETIME() AT TIME ZONE 'UTC') AT TIME ZONE @tz AS date) END;
+DECLARE @base date = TRY_CONVERT(date, '$(BaselineDate)');
+-- Local midnight of each window's own date, in UTC
+DECLARE @cS datetime2 = CASE WHEN @tz IS NULL THEN DATEADD(MINUTE, -@off, CAST(@today AS datetime2))
+                             ELSE CONVERT(datetime2, (CAST(@today AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END;
+DECLARE @aS datetime2 = CASE WHEN @tz IS NULL THEN DATEADD(DAY, -7, @cS)
+                             ELSE CONVERT(datetime2, (CAST(DATEADD(DAY, -7, @today) AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END;
+DECLARE @bS datetime2 = CASE WHEN @base IS NULL THEN NULL
+                             WHEN @tz IS NULL THEN DATEADD(MINUTE, -@off, CAST(@base AS datetime2))
+                             ELSE CONVERT(datetime2, (CAST(@base AS datetime2) AT TIME ZONE @tz) AT TIME ZONE 'UTC') END;
 DECLARE @hours int = DATEDIFF(MINUTE, @cS, SYSUTCDATETIME()) / 60;                 -- complete hours so far today
 IF @hours < 1 SET @hours = 1;
-DECLARE @base date = TRY_CONVERT(date, '$(BaselineDate)');
-DECLARE @aS datetime2 = DATEADD(DAY, -7, @cS);
-DECLARE @bS datetime2 = CASE WHEN @base IS NULL THEN NULL ELSE DATEADD(MINUTE, -@off, CAST(@base AS datetime2)) END;
 DECLARE @cSo datetimeoffset = CAST(@cS AS datetimeoffset), @cEo datetimeoffset = CAST(DATEADD(HOUR, @hours, @cS) AS datetimeoffset);
 DECLARE @aSo datetimeoffset = CAST(@aS AS datetimeoffset), @aEo datetimeoffset = CAST(DATEADD(HOUR, @hours, @aS) AS datetimeoffset);
 DECLARE @bSo datetimeoffset = CAST(@bS AS datetimeoffset), @bEo datetimeoffset = CAST(DATEADD(HOUR, @hours, @bS) AS datetimeoffset);
 
-SELECT DB_NAME() AS db, CONVERT(varchar(16), GETDATE(), 120) AS now_local, @hours AS hours_compared,
-       CONVERT(varchar(10), DATEADD(MINUTE, @off, @aS), 120) AS day_a_week_ago, CONVERT(varchar(10), @base, 120) AS day_b_baseline, CONVERT(varchar(10), CAST(GETDATE() AS date), 120) AS day_c_today;
+SELECT DB_NAME() AS db, ISNULL(@tz, N'server offset now') AS time_zone, @hours AS hours_compared,
+       CONVERT(varchar(10), DATEADD(DAY, -7, @today), 120) AS day_a_week_ago, CONVERT(varchar(10), @base, 120) AS day_b_baseline, CONVERT(varchar(10), @today, 120) AS day_c_today,
+       CONVERT(varchar(16), @aS, 120) AS a_starts_utc, CONVERT(varchar(16), @bS, 120) AS b_starts_utc, CONVERT(varchar(16), @cS, 120) AS c_starts_utc;
 
 -- 1. Hour by hour (local hour)
 WITH r AS (
