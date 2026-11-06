@@ -17,9 +17,10 @@ Everything Claude runs is **read-only**. A human DBA deploys every change, from 
 | `sql-query-tuning` | "Why is this procedure slow?" – statement-level profile, the expensive operator, the smallest proven fix, packaged for the DBA |
 | `sql-daily-dashboard` | "Run the dashboard" – one self-contained page a day, with a work board and a drill-down that starts the tuning work |
 | `sql-deadlock-analysis` | "We keep getting deadlocks" – rate and lock-type mix, every graph the server still holds clustered into patterns with mechanism tags, weeks of history per pattern from Query Store, root cause per side (with the tuning skill) and the upstream driver (with the hotspots skill), a ranked fix per pattern and a verify step |
+| `sql-release-verification` | "The vendor upgraded last night – check it", "Is the hot-fix working?" – the deploy window and what it touched, which objects really changed (snapshot diffs, or Query Store statement texts when there is no snapshot), whether local patches, indexes, permissions and forced plans survived, same-output checks, cost before vs after like for like, new errors and deadlocks, a verdict with re-check dates; also what to capture before an announced release |
 | `sql-findings-report` | "Write this up / make a vendor ticket" – analysis docs, vendor tickets and notes with mermaid diagrams, rendered to HTML and PDF |
 
-Coming next: `sql-release-verification` (vendor upgrades and hot-fixes) and `sql-client-path-profiler` ("is it the database or the app?").
+Coming next: `sql-client-path-profiler` ("is it the database or the app?").
 
 All skills share `core/`: safety rules, the site-profile and findings-ledger templates, field guides, a catalog of proven fixes, patch packaging and report rendering.
 

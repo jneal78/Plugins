@@ -65,7 +65,7 @@ Work the patterns from largest to smallest, and stop when the rest add up to noi
   - concurrency on one key (two workers, client retries after a timeout, double submissions);
   - a client that holds transactions open, runs at serializable, or turns autocommit off;
   - a monitoring check;
-  - a recent change (a release, a plan flip, data growth, a placeholder value).
+  - a recent change (a release, a plan flip, data growth, a placeholder value). For a pattern that started with a vendor release, **sql-release-verification** shows what the release changed and whether it removed a local fix.
   
   `references/method.md` has the checklist and which script answers each item.
 - **Count monitoring-tool victims separately.** They are real deadlocks that cost the application little. Fix the check (its owner is the monitoring admin), and keep them out of the application's rate.
