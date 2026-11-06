@@ -14,8 +14,8 @@
   ],
   "candidates": "findings-ledger.md",
   "drill": {
-    "skill": "sqlserver-performance-analysis",
-    "scripts": "C:\\path\\to\\sqlserver-performance-analysis\\scripts"
+    "skill": "sqlserver-dba (sql-query-tuning: 05, 06; sql-workload-hotspots: 08, 09)",
+    "scripts": "C:\\path\\to\\sqlserver-dba\\skills\\<skill>\\scripts"
   },
   "thresholds": {
     "cpuPctWarn": 60, "cpuPctAlert": 80,

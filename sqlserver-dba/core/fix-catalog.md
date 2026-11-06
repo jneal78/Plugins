@@ -1,5 +1,7 @@
 # Fix patterns: symptom → evidence → fix → proof
 
+Deadlock shapes (lock order, conversions, same-key concurrency, key lookups, range locks, escalation, schema locks, client-held transactions) have their own catalog in `skills/sql-deadlock-analysis/references/deadlock-patterns.md`; it points back here for the code fixes (§5, §6, §13–19).
+
 Each pattern below came from a real production fix. The measured results are included so you can calibrate what "good" looks like. Always keep the SELECT list, joins and predicates unchanged unless the fix *is* a logic correction, and prove row parity.
 
 ## 1. Row goal turns an existence check into a scan

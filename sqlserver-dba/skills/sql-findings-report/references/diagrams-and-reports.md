@@ -7,6 +7,7 @@
 | The hot path: caller → procedure → statement → the expensive operator → the cost | `flowchart TB` (LR only for ≤ 5 nodes) | Nodes carry numbers (calls/hr, rows per call, ms); the bad nodes are red (`style x fill:#fde2e2,stroke:#c0392b`) |
 | Before vs after plan shape | `flowchart LR` with two `subgraph`s, each `direction TB` | Red for the scan in "now", green (`fill:#e3f4e8,stroke:#1e8449`) for the seek in "fix" |
 | An integration's call sequence, including where it fails | `sequenceDiagram` | Participants = external system, connector/service (host, login), database; notes for counts |
+| A deadlock cycle | `sequenceDiagram` | Participants = each side (caller, code:line) and the locked table/index; arrows = locks taken, then waits; a note names the victim, the rate and the upstream driver |
 | Trend (hourly CPU, today vs week ago) | `xychart-beta` (mermaid ≥ 10.6) or a hand-placed SVG polyline in an HTML report | Label hours on the x-axis; say which line is which in the caption |
 | Where the CPU goes, by group | `pie` (sparingly) or a table | Tables are usually clearer |
 | Timeline of a regression and fix | `timeline` or a small table | Deploy times, hot-fix time, verification |
@@ -52,6 +53,21 @@ sequenceDiagram
   DB-->>SVC: Msg 8114 varchar to bigint, statement rolled back
   Note over SVC: Address not saved, retried next cycle
   Note over DB: ≈4,500 failures/day, 50 successes
+```
+
+A deadlock pattern (from sql-deadlock-analysis): one participant per side, named by its caller, then the locks in time order, then the victim. Keep table and index names; they are what the developer needs.
+
+```mermaid
+sequenceDiagram
+  participant A as Worker 1 (App service, usp_SaveDoc line 251)
+  participant T as dbo.DocFields / PK (key locks)
+  participant B as Worker 2 (App service, usp_SaveDoc_Post line 110)
+  A->>T: X on doc 42 field "Status" (rows in the order the client sent them)
+  B->>T: X on doc 42 field "Amount" (rows in key order)
+  A-->>T: wants "Amount", waits for Worker 2
+  B-->>T: wants "Status", waits for Worker 1
+  Note over T: Cycle, Worker 2 chosen as victim (error 1205)
+  Note over A,B: Same document saved twice at once, ≈4/day, bursts at shift change
 ```
 
 ### Mermaid gotchas (mermaid 10.x)

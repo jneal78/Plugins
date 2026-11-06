@@ -21,13 +21,18 @@ $words = @('INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TRUNCATE', 'DROP', 'CREATE', 
 $rx = [regex]::new('\b(' + ($words -join '|') + ')\b', 'IgnoreCase')
 $tempTable = [regex]::new('(^|[\s(,])#\w+', 'None')
 
-$files = Get-ChildItem (Join-Path $Root 'skills') -Recurse -File -Filter *.sql
+# PowerShell scripts under skills/ are checked too: guardrails scan a script run with -File the same way, and a write
+# keyword anywhere in it (a comment, a list of words) makes the guardrail treat the run as a write.
+
+$files = @(Get-ChildItem (Join-Path $Root 'skills') -Recurse -File -Include *.sql, *.ps1)
 $hits = foreach ($f in $files) {
     $n = 0
+    $isSql = $f.Extension -eq '.sql'
     foreach ($line in [IO.File]::ReadLines($f.FullName)) {
         $n++
-        foreach ($m in $rx.Matches($line)) { [pscustomobject]@{ file = [IO.Path]::GetRelativePath($Root, $f.FullName); line = $n; word = $m.Value; text = $line.Trim() } }
-        if ($tempTable.IsMatch($line) -and $line -notmatch '^\s*--') { [pscustomobject]@{ file = [IO.Path]::GetRelativePath($Root, $f.FullName); line = $n; word = '#temp'; text = $line.Trim() } }
+        $rel = [IO.Path]::GetRelativePath($Root, $f.FullName)
+        foreach ($m in $rx.Matches($line)) { [pscustomobject]@{ file = $rel; line = $n; word = $m.Value; text = $line.Trim() } }
+        if ($isSql -and $tempTable.IsMatch($line) -and $line -notmatch '^\s*--') { [pscustomobject]@{ file = $rel; line = $n; word = '#temp'; text = $line.Trim() } }
     }
 }
 if ($hits) {
@@ -35,4 +40,4 @@ if ($hits) {
     "{0} problem(s) in {1} file(s)." -f @($hits).Count, @($hits | Select-Object -Unique file).Count
     exit 1
 }
-"Read-only: {0} SQL files checked." -f $files.Count
+"Read-only: {0} SQL and {1} PowerShell files checked." -f @($files | Where-Object Extension -eq '.sql').Count, @($files | Where-Object Extension -eq '.ps1').Count

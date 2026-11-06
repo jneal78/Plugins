@@ -12,7 +12,7 @@ Goal: one sentence of root cause – *"statement N spends X of Y CPU because ope
 The shared core is at `../../core/` from this skill's folder.
 1. **Find the site folder** (`core/site.md`): the profile gives production servers, the Query Store policy, the local index prefix and change marker, and where patches are saved. Check the ledger: the object may already have a fix, ready or deployed.
 2. **Read `core/safety.md`** the first time in a session.
-3. If you arrived from **sql-workload-hotspots** or the dashboard, start from its handoff request (object, statement, windows, numbers) instead of re-measuring.
+3. If you arrived from **sql-workload-hotspots**, **sql-deadlock-analysis** or the dashboard, start from its handoff request (object, statement, windows, numbers, or the locks a deadlock side holds and wants) instead of re-measuring. For a deadlock side the question is which rows the statement *reads*, because that decides the locks it takes: a scan, a key lookup or a non-seekable predicate is usually the root cause, and the fix that removes it also removes the deadlock.
 
 ## Steps and scripts
 

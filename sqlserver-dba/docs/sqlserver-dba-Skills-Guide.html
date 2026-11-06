@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sqlserver-dba Skills Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,650&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a technical handbook – left contents rail on wide screens, one reading column, skill sheets as bordered panels */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --ink: #1b2430;
+  --muted: #566170;
+  --rule: #d9dee5;
+  --accent: #1d5f8a;
+  --accent-soft: #e4eef6;
+  --ok: #2f7a4f;
+  --ok-soft: #e3f2e8;
+  --warn: #9a5b12;
+  --warn-soft: #f8ecd9;
+  --code-bg: #eef1f5;
+  --display: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12171e; --surface: #19202a; --ink: #e3e8ef; --muted: #9aa6b5; --rule: #2c3644;
+    --accent: #7db7e0; --accent-soft: #1d2d3d; --ok: #7ccf9b; --ok-soft: #1a2e23;
+    --warn: #e5b26b; --warn-soft: #33281a; --code-bg: #222b37; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12171e; --surface: #19202a; --ink: #e3e8ef; --muted: #9aa6b5; --rule: #2c3644;
+  --accent: #7db7e0; --accent-soft: #1d2d3d; --ok: #7ccf9b; --ok-soft: #1a2e23;
+  --warn: #e5b26b; --warn-soft: #33281a; --code-bg: #222b37; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15.5px/1.6 var(--body); }
+.wrap {
+  max-width: 1180px; margin: 0 auto;
+  padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px;
+}
+nav.toc { position: sticky; top: calc(24px + env(safe-area-inset-top, 0px)); align-self: start; font-size: 13.5px; }
+nav.toc p { margin: 0 0 8px; font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+nav.toc a { color: var(--muted); text-decoration: none; display: block; padding: 3px 0 3px 10px; border-left: 2px solid var(--rule); }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); border-left-color: var(--accent); outline: none; }
+main { min-width: 0; max-width: 820px; }
+header.top { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 1px solid var(--rule); margin-bottom: 8px; }
+.kicker { font: 500 12px/1 var(--mono); letter-spacing: .06em; color: var(--accent); text-transform: uppercase; }
+h1 { font: 650 clamp(30px, 4.4vw, 44px)/1.12 var(--display); margin: 0; text-wrap: balance; letter-spacing: -.01em; }
+.lede { font-size: 17.5px; color: var(--muted); margin: 0; max-width: 64ch; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.chip { font: 500 12.5px/1 var(--body); padding: 6px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.chip.ok { background: var(--ok-soft); color: var(--ok); }
+section { padding-top: 36px; }
+h2 { font: 650 26px/1.2 var(--display); margin: 0 0 12px; text-wrap: balance; }
+h3 { font: 600 17px/1.3 var(--body); margin: 22px 0 8px; }
+p, li { max-width: 68ch; }
+ul, ol { padding-left: 20px; }
+li + li { margin-top: 4px; }
+code { font: 13.5px var(--mono); background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre.cmd { font: 13px/1.55 var(--mono); background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; margin: 10px 0 16px; }
+.tablewrap { overflow-x: auto; margin: 12px 0 18px; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { font-weight: 600; font-size: 12.5px; letter-spacing: .03em; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.diagram { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 14px 0 18px; }
+.sheet { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 22px 24px 18px; margin: 18px 0 22px; }
+.sheet header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 14px; }
+.sheet h3 { margin: 0; font: 600 20px/1.25 var(--mono); color: var(--accent); }
+.sheet .ask { margin: 8px 0 4px; color: var(--muted); font-style: italic; }
+.sheet dl { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px 18px; margin: 16px 0 0; }
+.sheet dt { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+.sheet dd { margin: 0; min-width: 0; }
+.sheet dd ul, .sheet dd ol { margin: 0; }
+.tag { font: 500 11.5px/1 var(--body); padding: 5px 8px; border-radius: 6px; background: var(--ok-soft); color: var(--ok); white-space: nowrap; }
+.tag.dba { background: var(--warn-soft); color: var(--warn); }
+.callout { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+.callout p { margin: 0; }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 14px 0; }
+.box { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.box h4 { margin: 0 0 6px; font: 600 14px/1.3 var(--body); }
+.box ul { margin: 0; font-size: 14px; }
+.box.never h4 { color: var(--warn); }
+.box.may h4 { color: var(--ok); }
+.example { border-top: 1px solid var(--rule); padding-top: 18px; margin-top: 26px; }
+.example h3 { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 18px; }
+.exn { font: 600 12px/1 var(--mono); width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; background: var(--accent); color: var(--surface); flex: none; }
+.prompt { font: 15px/1.5 var(--mono); background: var(--surface); border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 10px 14px; margin: 8px 0 12px; }
+.prompt::before { content: "you › "; color: var(--muted); }
+.out { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 16px 2px; margin: 12px 0; }
+.out p { margin-top: 0; }
+figure.dash { margin: 14px 0 18px; background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.dash-verdict { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 14px; }
+.sev { font: 600 12px/1 var(--body); padding: 5px 9px; border-radius: 6px; }
+.sev.ok { background: var(--ok-soft); color: var(--ok); }
+.dash-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.dash-kpis div { border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; }
+.dash-kpis .k { font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.dash-kpis .v { font: 600 22px/1.2 var(--mono); font-variant-numeric: tabular-nums; }
+.dash-kpis .u { font-size: 12px; color: var(--muted); }
+figure.dash svg { width: 100%; height: auto; display: block; }
+figure.dash .grid line { stroke: var(--rule); stroke-width: 1; }
+figure.dash .axis text, figure.dash .legend text { fill: var(--muted); font: 11px var(--mono); }
+figure.dash .bars rect, figure.dash .bars-l { fill: var(--accent); opacity: .85; }
+figure.dash .line { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 5 4; }
+.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.board div { border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px; min-width: 0; font-size: 13px; }
+.board h5 { margin: 0 0 6px; font: 600 11.5px/1.2 var(--body); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.board p { margin: 4px 0 0; }
+@media (max-width: 700px) { .dash-kpis, .board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media print {
+  :root { --bg: #ffffff; --surface: #ffffff; }
+  body { font-size: 12.5px; }
+  .wrap { display: block; padding: 0; max-width: none; }
+  nav.toc { display: none; }
+  main { max-width: none; }
+  .sheet, .example, figure.dash, .diagram, .tablewrap, pre.cmd { break-inside: avoid; }
+  pre.cmd { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; }
+  section { padding-top: 20px; }
+  h2 { break-after: avoid; }
+}
+footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 13px; }
+a { color: var(--accent); }
+@media (max-width: 900px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  nav.toc { position: static; }
+  nav.toc ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .sheet { padding: 18px 16px 14px; }
+  .sheet dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .sheet dd { margin-bottom: 10px; }
+  .two { grid-template-columns: minmax(0, 1fr); }
+  nav.toc ol { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <p>Contents</p>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#how">How it fits together</a></li>
+    <li><a href="#skills">The six skills</a></li>
+    <li><a href="#examples">Examples</a></li>
+    <li><a href="#core">The shared core</a></li>
+    <li><a href="#site">Your site folder</a></li>
+    <li><a href="#safety">Safety model</a></li>
+    <li><a href="#fixes">Fix catalog</a></li>
+    <li><a href="#install">Install and set up</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="top">
+  <span class="kicker">Claude Code plugin · version 0.2</span>
+  <h1>sqlserver-dba: skills for a careful senior DBA</h1>
+  <p class="lede">Six Claude skills that check a busy SQL Server's health, find where its time goes, explain why the expensive statements are expensive, untangle its deadlocks down to the code and the caller behind them, prove the smallest fix, and write it up for the team or the vendor. Claude only reads production; a person deploys every change.</p>
+  <div class="facts">
+    <span class="chip ok">Read-only on production</span>
+    <span class="chip">SQL Server 2016+ with Query Store</span>
+    <span class="chip">No organization data in the plugin</span>
+    <span class="chip">Fixes come with exact rollbacks</span>
+  </div>
+</header>
+
+<section id="overview">
+  <h2>Overview</h2>
+  <p>The skills package a method that was worked out on a busy production server running vendor applications, integrations and in-house code. They follow the order an experienced DBA uses:</p>
+  <ol>
+    <li><strong>Measure first.</strong> Query Store, plan-cache DMVs and plan XML say where CPU, reads, timeouts and errors go, by hour, integration, object and statement.</li>
+    <li><strong>Find the few statements that matter,</strong> and name the plan operator that costs the time and the predicate that stops it seeking.</li>
+    <li><strong>Change as little as possible:</strong> a caller fix, an in-procedure hint or small rewrite, or a narrow index, and prove the results are identical.</li>
+    <li><strong>Leave a paper trail:</strong> a guarded deploy, an exact rollback, a verify script, and a write-up with diagrams that a colleague or vendor can act on.</li>
+  </ol>
+  <p>Each skill answers one kind of question, so Claude picks the right one from how you ask. They share one core of rules and templates, and they all read your organization's site folder: your servers, policies, baseline and the list of fixes already done. Nothing about your organization ships in the plugin.</p>
+</section>
+
+<section id="how">
+  <h2>How it fits together</h2>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    subgraph Plugin["sqlserver-dba plugin – shared"]
+        SK["skills/<br/>health-check · workload-hotspots · query-tuning<br/>deadlock-analysis · daily-dashboard · findings-report"]
+        CO["core/<br/>safety · site and ledger templates · field guides<br/>fix catalog · patch packaging · report rendering"]
+        TL["tools/<br/>scrub check · read-only script lint"]
+        SK --> CO
+    end
+    subgraph Org["Your site folder – never shipped"]
+        SP["site-profile.md<br/>servers · policies · baseline · normal levels"]
+        LED["findings ledger<br/>done · ready · open · watch"]
+        OUT["your analyses, patches,<br/>reports and dashboards"]
+    end
+    DB[(production<br/>SQL Server)]
+    Plugin -->|"reads the profile · updates the ledger · writes reports"| Org
+    Plugin -->|"read-only"| DB
+</pre>
+  </div>
+  <p>The skills hand work to each other with a short, explicit request – object, time windows, numbers, query ids – so the next skill starts working instead of measuring again.</p>
+  <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+    Q1([How's the server?]) --> HC[sql-health-check]
+    Q2([Run the dashboard]) --> DD[sql-daily-dashboard]
+    Q3([Where does the CPU go?<br/>What changed?]) --> HS[sql-workload-hotspots]
+    Q4([Why is this procedure slow?]) --> QT[sql-query-tuning]
+    Q5([Write this up]) --> FR[sql-findings-report]
+    Q6([We keep getting deadlocks]) --> DL[sql-deadlock-analysis]
+    HC -->|top candidate| HS
+    HC -->|deadlock rate above normal| DL
+    DL -->|statement of one side| QT
+    DL -->|who sends it, what changed| HS
+    DL -->|cycle diagram, vendor tickets| FR
+    DD -->|drill-down request| HS
+    DD -->|drill-down request| QT
+    HS -->|one object or statement| QT
+    QT -->|guarded patch + numbers| FR
+    HC -->|health report| FR
+    FR --> LED[(findings ledger)]
+    QT --> LED
+    LED -->|work board| DD
+</pre>
+  </div>
+</section>
+
+<section id="skills">
+  <h2>The six skills</h2>
+  <p>Every skill starts the same way: it finds your site folder, reads the profile and the ledger, and reads the safety rules once per session. Every server query it runs is SELECT-only.</p>
+
+  <article class="sheet" id="sql-health-check">
+    <header><h3>sql-health-check</h3><span class="tag">read-only</span></header>
+    <p class="ask">"How's the server doing?" · "Is anything wrong right now?" · "Compare today with last week."</p>
+    <p>A health verdict for one server, its workload against a week ago and a known-good day, and a ranked list of the savings still available.</p>
+    <dl>
+      <dt>What it checks</dt>
+      <dd>CPU (the engine's own meter, hour by hour), memory and its clerks, worker threads and waits for a thread, sessions by program, the availability group, tempdb, disk space and I/O latency, log backups, blocking and long requests, deadlocks, key settings, Query Store size and state.</dd>
+      <dt>Live rates</dt>
+      <dd>A 60-second sample: batch requests, transactions, compiles and recompiles, page reads and splits, lock waits, deadlocks, I/O per database file, and the top waits with the benign ones filtered out.</dd>
+      <dt>Workload comparison</dt>
+      <dd>Today from midnight to the last complete hour against the same clock hours 7 days ago and on the baseline day: CPU, reads and timeouts by hour; average cores busy; waits by category; the top 30 objects; the biggest movers in both directions.</dd>
+      <dt>What you get</dt>
+      <dd>A verdict paragraph, a week-ago / baseline / today table, each resource with a verdict, what was fixed since, ranked candidates with estimated CPU-minutes saved per day, server settings framed as the DBA's call, and an optional PDF with an hourly CPU chart.</dd>
+      <dt>Hands off to</dt>
+      <dd>Workload hotspots for "what changed", query tuning for one object, the findings report for the PDF.</dd>
+    </dl>
+  </article>
+
+  <article class="sheet" id="sql-workload-hotspots">
+    <header><h3>sql-workload-hotspots</h3><span class="tag">read-only</span></header>
+    <p class="ask">"Where is the CPU going?" · "What changed since the upgrade?" · "Who is running this query?" · "Why does this keep timing out?"</p>
+    <p>Works top-down – server, database, workload group, object, statement – and stops at the level that answers the question.</p>
+    <dl>
+      <dt>Steps</dt>
+      <dd><ol>
+        <li>Triage: is the box healthy right now?</li>
+        <li>Where: top objects and statements by CPU, reads, timeouts and errors against a week ago.</li>
+        <li>When: hour over hour, by your workload groups (integrations, products, ad hoc).</li>
+        <li>What changed: per-execution regressions and new statements between two windows, ranked by extra CPU per hour.</li>
+        <li>Who: the program, host, login and process that send a statement – including failing ones nobody recognizes.</li>
+        <li>Failing: timeouts and errors by day and object, engine exceptions, and the data that triggers them.</li>
+      </ol></dd>
+      <dt>Rules it keeps</dt>
+      <dd>Rank by recoverable CPU per day, then user impact, then risk. Check a business table before calling a rise "load growth". Group literal ad hoc SQL by query hash. Cross-check Query Store's blind spots against the plan cache.</dd>
+      <dt>Scripts</dt>
+      <dd><code>01</code> server snapshot · <code>02</code> top consumers · <code>03</code> hourly by group · <code>04</code> regressions · <code>08</code> who runs it · <code>09</code> errors and timeouts</dd>
+      <dt>Hands off to</dt>
+      <dd>Query tuning, with a request that names the statement, its query hash, windows and per-call numbers.</dd>
+    </dl>
+  </article>
+
+  <article class="sheet" id="sql-query-tuning">
+    <header><h3>sql-query-tuning</h3><span class="tag">read-only analysis</span></header>
+    <p class="ask">"Why is this procedure slow?" · "What's wrong with this plan?" · "Can we fix the vendor's procedure?"</p>
+    <p>Ends in one sentence of root cause – <em>statement N spends X of Y CPU because operator O reads R rows of table T per execution, since predicate P can't seek index I</em> – and the smallest change that removes that operator.</p>
+    <dl>
+      <dt>Steps</dt>
+      <dd><ol>
+        <li>Fingerprint: definition hash, modify date, SET options, signature, plan guides, local change marker.</li>
+        <li>Cost by statement: which statement, which plan, since when, which waits; plan flips at the nightly recompile.</li>
+        <li>Read the plan: scans on the inner side of loops, eager spools, row goals, OR joins, implicit conversions, per-row functions, spills.</li>
+        <li>Understand the data: row counts, skew, placeholder values, tables that only grow.</li>
+        <li>Design and prove: 2–4 variants as read-only SELECTs; rows compared both ways; CPU and reads for each.</li>
+        <li>Benchmark live with a timed delta of the plan-cache counters.</li>
+        <li>Package the fix for the DBA.</li>
+      </ol></dd>
+      <dt>Fix order</dt>
+      <dd>Caller or configuration fix → in-procedure hint or small rewrite → narrow, prefixed index → server settings. Query Store plan forcing follows your site's policy; the default is code first, forcing only with approval.</dd>
+      <dt>What you get</dt>
+      <dd>A patch folder: exact rollback, patched copy, guarded deploy, parity test, verify script, README and a vendor note.</dd>
+      <dt>Scripts</dt>
+      <dd><code>05</code> object profile · <code>06</code> plan operators · <code>07</code> live delta benchmark · <code>10</code> implicit conversions · <code>11</code> definition fingerprint · <code>12</code> missing indexes</dd>
+    </dl>
+  </article>
+
+  <article class="sheet" id="sql-deadlock-analysis">
+    <header><h3>sql-deadlock-analysis</h3><span class="tag">read-only</span></header>
+    <p class="ask">"We keep getting deadlocks." · "What deadlocked last night?" · "Why does this save fail with error 1205?"</p>
+    <p>Assigns every deadlock the server still remembers to a repeatable pattern, then explains each pattern twice: the <em>root cause</em> (which statement locks what, through which plan and index) and what is <em>upstream</em> (which program, host, job, schedule or change brings the two sides together). It uses the other skills for both.</p>
+    <dl>
+      <dt>Steps</dt>
+      <dd><ol>
+        <li>Rate: deadlocks since restart, split by lock type (key, page, heap, table, metadata, application), where graphs are kept, isolation settings.</li>
+        <li>Collect: every graph in the <code>system_health</code> event files (path found automatically) or ring buffer, or a dedicated session; a bounded collector when the files only reach back hours.</li>
+        <li>Cluster: patterns by the code on each side and the locked objects, with mechanism tags and catalog candidates (local, no server).</li>
+        <li>History: weeks of trend per pattern from the victim statements' failed executions in Query Store, by day and by hour of day.</li>
+        <li>Root cause per side, with <strong>sql-query-tuning</strong>: the definition at the line, the plan, scans, key lookups and the predicate that stops a seek; table indexes, heaps, escalations, unindexed foreign keys, triggers.</li>
+        <li>Upstream, with <strong>sql-workload-hotspots</strong>: who sends each side, when, how busy that source is, what changed when the pattern started, Agent jobs and their schedules.</li>
+        <li>Fix at the right owner, verify the pattern is gone (fresh graphs compared with the earlier run), write up with <strong>sql-findings-report</strong>.</li>
+      </ol></dd>
+      <dt>Mechanisms it recognizes</dt>
+      <dd>17 catalog entries, among them: lock order across tables · read-then-write conversions · two sessions on one business key · key lookup vs write · scans under page locks · heaps used as queues · serializable range locks · lock escalation · mass rewrite jobs · plan flips and placeholder values · unindexed foreign keys · schema locks · parallelism · application locks · monitoring tools · transactions held open by the client · triggers inside the transaction.</dd>
+      <dt>Upstream signals</dt>
+      <dd>Same routine on both sides, sides from different application hosts, transactions opened before the current batch, autocommit off, distributed transactions, serializable clients, Agent jobs, blank program names, negative deadlock priority, bursts.</dd>
+      <dt>Scripts</dt>
+      <dd><code>13</code> probe · <code>14</code> event-file graphs · <code>15</code> ring buffer · <code>16</code> Query Store history per pattern · <code>17</code> objects · <code>18</code> Agent jobs · <code>Collect-Deadlocks.ps1</code> · <code>Analyze-Deadlocks.ps1</code> · a DBA-run template for a dedicated deadlock session</dd>
+    </dl>
+  </article>
+
+  <article class="sheet" id="sql-daily-dashboard">
+    <header><h3>sql-daily-dashboard</h3><span class="tag">read-only</span></header>
+    <p class="ask">"Run the dashboard." · "What's bubbling up?" · "Set up a daily dashboard for our server."</p>
+    <p>One self-contained HTML page per run, built from read-only collectors in one to three minutes. It has no server connection, so it can be opened offline, mailed or archived.</p>
+    <dl>
+      <dt>On the page</dt>
+      <dd>A verdict naming the worst check and "look first at"; KPIs for today, a week ago and the baseline; hourly CPU with a CPU-minutes or percent-of-server switch; integrations with CPU, timeouts, errors and business throughput side by side; a group-by-hour heatmap; sortable top objects with flags; statement movers; waits.</dd>
+      <dt>Work board</dt>
+      <dd>Bubbling up → open → ready to deploy → done-watch, read from your findings ledger, with owners and CPU.</dd>
+      <dt>Drill-down</dt>
+      <dd>For each object: today vs a week ago vs baseline, the signals behind its score, its hourly shape, statements and plans, and a ready-made request to paste to Claude.</dd>
+      <dt>Files</dt>
+      <dd><code>Dashboard_&lt;date&gt;_&lt;HHmm&gt;.html</code> for each run, <code>Dashboard_latest.html</code> for a bookmark, and the data as JSON so a page can be re-rendered without the server.</dd>
+    </dl>
+  </article>
+
+  <article class="sheet" id="sql-findings-report">
+    <header><h3>sql-findings-report</h3><span class="tag">local only</span></header>
+    <p class="ask">"Write this up." · "Make a vendor ticket." · "Give me a PDF for my manager."</p>
+    <p>Turns findings into documents for people who weren't in the analysis: verdict first, then the numbers, then what to do.</p>
+    <dl>
+      <dt>Documents</dt>
+      <dd>Analysis of one problem · vendor bug ticket with an impact assessment (data, business, exposure, performance) · short vendor note for a local patch · health or week-over-week report.</dd>
+      <dt>Diagrams</dt>
+      <dd>Mermaid diagrams that show a mechanism: the hot path from caller to the expensive operator, before-and-after plan shape, a sequence for an integration or a deadlock, a trend.</dd>
+      <dt>Output</dt>
+      <dd>Markdown rendered to HTML and PDF locally with headless Edge or Chrome, checked by screenshot before it's handed over. Claude never sends anything itself.</dd>
+    </dl>
+  </article>
+</section>
+
+<section id="examples">
+  <h2>Examples</h2>
+  <p>Seven worked scenarios. The prompts are what a DBA would type; the commands are what Claude runs (all read-only); the outputs are trimmed. Server, database and object names are made up.</p>
+
+  <article class="example" id="ex-health">
+    <h3><span class="exn">1</span> Morning health check</h3>
+    <p class="prompt">How's the production server doing today compared with last week?</p>
+    <p><strong>Skill:</strong> sql-health-check. It reads the site profile (production listener <code>SQLPROD01</code>, main database <code>AppDb</code>, baseline 2026-10-16), then runs three scripts:</p>
+<pre class="cmd">sqlcmd -S SQLPROD01 -d AppDb -E -I -W -s"|" -t 120 -i health_server.sql
+sqlcmd -S SQLPROD01 -d AppDb -E -I -W -h -1 -s"|" -t 120 -i health_rates.sql -o rates.txt
+sqlcmd -S SQLPROD01 -d AppDb -E -I -W -s"|" -t 300 -v BaselineDate=2026-10-16 -i health_workload.sql</pre>
+    <div class="out">
+      <p><strong>Verdict:</strong> healthy. CPU averaged 38% (peak 55% at 10:00). Today's AppDb workload is 2,250 CPU-min to 14:00, 12% below the same hours last week and 38% below the baseline. One <strong>new</strong> item: <code>dbo.usp_GetTrips</code> doubled its CPU per call since Tuesday.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>00:00–14:00</th><th>Week ago</th><th>Baseline</th><th>Today</th><th>Change vs week ago</th></tr></thead>
+        <tbody>
+          <tr><td>CPU-min (Query Store)</td><td class="num">2,560</td><td class="num">3,616</td><td class="num">2,250</td><td class="num">−12%</td></tr>
+          <tr><td>Average cores busy</td><td class="num">3.0</td><td class="num">4.3</td><td class="num">2.7</td><td class="num">−0.3</td></tr>
+          <tr><td>Timeouts</td><td class="num">41</td><td class="num">118</td><td class="num">23</td><td class="num">−44%</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </article>
+
+  <article class="example" id="ex-hotspots">
+    <h3><span class="exn">2</span> What changed after a vendor release</h3>
+    <p class="prompt">The vendor pushed a release last night. What changed in the workload since 06:00?</p>
+    <p><strong>Skill:</strong> sql-workload-hotspots, steps 2–4: top consumers, then regressions between "yesterday 06:00–12:00" and "today 06:00–12:00", matched by query hash so rewritten statements still line up.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Statement (object, query hash)</th><th>ms per call before → after</th><th>Calls per hour</th><th>Extra CPU-min/hour</th></tr></thead>
+      <tbody>
+        <tr><td><code>udf_StopDetail</code> lookup, <code>0x9A1F…</code></td><td class="num">3 → 14</td><td class="num">458,000</td><td class="num">+84</td></tr>
+        <tr><td><code>usp_GetTrips</code> stops query, <code>0x51C0…</code></td><td class="num">120 → 131</td><td class="num">3,900</td><td class="num">+0.7</td></tr>
+        <tr><td><strong>new</strong>: <code>usp_SaveMessage</code> loop, <code>0x0D44…</code></td><td class="num">— → 6</td><td class="num">22,000</td><td class="num">+2.2</td></tr>
+      </tbody>
+    </table></div>
+    <p>It ends with a handoff request you can paste, so tuning starts without measuring again:</p>
+<pre class="cmd">Tune dbo.udf_StopDetail on SQLPROD01/AppDb: statement query_hash 0x9A1F…,
+≈ +84 CPU-min/hour since the 2026-11-05 release (06:00 CST), 3 → 14 ms and
+≈ 3,900 reads per call, called per stop by usp_GetTrips (≈ 458K calls/hour).</pre>
+  </article>
+
+  <article class="example" id="ex-tuning">
+    <h3><span class="exn">3</span> Tuning one function, with diagrams</h3>
+    <p class="prompt">Why is udf_StopDetail slow now, and what's the smallest fix?</p>
+    <p><strong>Skill:</strong> sql-query-tuning. The plan shows a clustered index scan of a 116K-row table inside a per-row function, because the seek key is an expression over the outer row. Root cause, in one sentence:</p>
+    <div class="callout"><p>Statement 3 spends 96% of the function's CPU because a clustered index scan reads ≈ 116,000 rows of <code>Units</code> per call, since <code>UnitNumber = COALESCE(L.trailer, S.trailer, '')</code> can't seek <code>IX_UnitNumber</code>.</p></div>
+    <p>The hot path, as the write-up draws it:</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart TB
+  app["Mobile app refresh<br/>≈ 3,900 calls/hr"] --> gl["usp_GetTrips"]
+  gl -->|"CROSS APPLY, ≈ 120 stops per call"| fn["udf_StopDetail<br/>≈ 458,000 calls/hr"]
+  fn --> q3["Statement 3: UnitNumber = COALESCE(outer columns)"]
+  q3 -->|"no seek possible"| scan["Clustered index scan<br/>Units, ≈ 116K rows per call"]
+  scan --> cpu["+84 CPU-min/hr<br/>server CPU 31–43% → 52–59%"]
+  style q3 fill:#fde2e2,stroke:#c0392b,color:#1b2430
+  style scan fill:#fde2e2,stroke:#c0392b,color:#1b2430
+  style cpu fill:#fde2e2,stroke:#c0392b,color:#1b2430
+</pre>
+    </div>
+    <p>And the fix, before and after:</p>
+    <div class="diagram">
+<pre class="mermaid">
+flowchart LR
+  subgraph now["Now, per stop"]
+    direction TB
+    a1["Stops (seek)"] --> a2["Lookup WHERE key = COALESCE(outer columns)"] --> a3["Scan PK_Units<br/>≈ 3,900 reads, ≈ 14 ms per call"]
+  end
+  subgraph fix["Fix, per stop"]
+    direction TB
+    b1["@k = COALESCE(...) once"] --> b2["WHERE key = @k"] --> b3["Seek IX_UnitNumber<br/>≈ 3–6 reads"]
+  end
+  now ~~~ fix
+  style a3 fill:#fde2e2,stroke:#c0392b,color:#1b2430
+  style b3 fill:#e3f4e8,stroke:#1e8449,color:#1b2430
+</pre>
+    </div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Variant (read-only SELECTs)</th><th>CPU per call</th><th>Reads per call</th><th>Rows identical</th></tr></thead>
+      <tbody>
+        <tr><td>As shipped</td><td class="num">14 ms</td><td class="num">3,900</td><td>—</td></tr>
+        <tr><td><code>FORCESEEK</code> only</td><td class="num">error 8622</td><td class="num">—</td><td>no plan possible</td></tr>
+        <tr><td>Key computed once into a variable</td><td class="num">3 ms</td><td class="num">5</td><td>yes, both directions</td></tr>
+      </tbody>
+    </table></div>
+    <p>What lands in the patch folder for the DBA:</p>
+<pre class="cmd">vendor_patches\udf_StopDetail\
+  udf_StopDetail_original_rollback.sql   live text byte for byte; restores the hash
+  udf_StopDetail_patched.sql             live text + 3 lines marked "-- MyCo 2026-11-06"
+  DEPLOY_udf_StopDetail_LIVE.sql         stops on wrong DB, hash change, running now, signed…
+  Parity_udf_StopDetail_ReadOnly.sql     patched / original / patched, rows and cost
+  Verify_udf_StopDetail.sql              read-only: version, plan cache, Query Store before/after
+  README.md                              problem, change, numbers, variants, upgrade checklist
+  Vendor_udf_StopDetail.md               the note for the vendor</pre>
+  </article>
+
+  <article class="example" id="ex-deadlocks">
+    <h3><span class="exn">4</span> Untangling a day of deadlocks</h3>
+    <p class="prompt">We're getting about 40 deadlocks a day. What are they, and what do we fix first?</p>
+    <p><strong>Skill:</strong> sql-deadlock-analysis, calling sql-query-tuning and sql-workload-hotspots along the way. It measures the rate, collects every graph the server still holds, and groups them locally:</p>
+<pre class="cmd">sqlcmd -S SQLPROD01 -d master -E -I -W -s"|" -t 60 -i 13_deadlock_probe.sql -o probe.txt
+sqlcmd -S SQLPROD01 -d master -E -I -y 0 -f 65001 -t 120 -i 14_deadlock_graphs_file.sql -o graphs_file_0833.json
+pwsh -NoProfile -Command "&amp; 'Analyze-Deadlocks.ps1' -Path 'raw\graphs_*.json' -OutDir analysis"
+
+49 distinct deadlocks, 2026-11-03 03:06 to 2026-11-06 08:42, 16 patterns
+[P1] 18x  usp_SaveDoc_Post:110 x usp_SaveDoc:251          same-index
+[P2]  8x  monitoring tool tempdb query x (any)            low-priority, schema
+[P3]  6x  usp_GetPendingDocs:108 x usp_GetPendingDocs:99  same-code, same-index
+[P4]  3x  usp_CloseOrder:982 x usp_DeleteOrderSection:204 cross-object, range
+[P6]  2x  usp_SetStatus:97 x udf_LookupTractor:20 (job)   agent-job, page</pre>
+    <div class="out">
+      <p><strong>Root cause and upstream, per pattern</strong> (from the report's sides table, then the other skills):</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Pattern</th><th>Root cause</th><th>Upstream driver</th><th>Fix and owner</th></tr></thead>
+        <tbody>
+          <tr><td>P1 · 18</td><td>Two save procedures lock the same document's field rows in different orders inside open transactions</td><td>In 18 of 18, the sides came from <strong>different application hosts</strong>: two workers save the same document at once</td><td><code>UPDLOCK, HOLDLOCK</code> on the document check (one save per document) · DBA + vendor note; ask the vendor why both workers get it</td></tr>
+          <tr><td>P2 · 8</td><td>A monitoring tool lists tempdb objects (Sch-S) while application triggers create cached temp tables (Sch-M)</td><td>Tool at deadlock priority −5, every few minutes; always the victim</td><td>Slow or turn off that collection · monitoring admin. Counted apart from application deadlocks</td></tr>
+          <tr><td>P4 · 3</td><td>Range locks on an empty child table</td><td>The vendor client opens every transaction at <strong>serializable</strong> (a framework default); the procedures never ask for it</td><td>Read committed in the client · vendor ticket</td></tr>
+          <tr><td>P6 · 2</td><td>A lookup function scans <code>dbo.Legs</code> under page locks for every row (converted key, no seek)</td><td>An Agent job, nightly at 03:00, running the function per row</td><td>Seekable test beside the original one (fix catalog) · DBA</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <p>The report gives each pattern its history target and its tables, so the trend and the table evidence come next. Query Store keeps weeks of the victim statement's failed executions:</p>
+<pre class="cmd">-- 16_deadlock_history_qs.sql, @Targets = N'P1=dbo.usp_SaveDoc_Post'
+label|day_local |weekday  |failed|execs|failed_per_1000
+P1   |2026-11-03|Tuesday  |    20|25299|  .79
+P1   |2026-11-04|Wednesday|    10|25185|  .40
+P1   |2026-11-05|Thursday |     5|25482|  .20
+P1   |2026-11-06|Friday   |     0|14603|  .00    &lt;- after the fix</pre>
+    <p>The write-up shows each cycle as a sequence diagram:</p>
+    <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  participant A as Worker on host 1 (usp_SaveDoc line 251)
+  participant T as dbo.DocFields / PK (key locks)
+  participant B as Worker on host 2 (usp_SaveDoc_Post line 110)
+  A->>T: X on doc 42 field "Status" (rows in the order the client sent them)
+  B->>T: X on doc 42 field "Amount" (rows in key order)
+  A-->>T: wants "Amount", waits for host 2
+  B-->>T: wants "Status", waits for host 1
+  Note over T: Cycle, host 2 chosen as victim (error 1205)
+  Note over A,B: Same document saved by two workers at once, 5 to 20 a day
+</pre>
+    </div>
+    <p>To verify, collect fresh graphs a few days later and compare them with the first run. Patterns are marked continuing or new, and the fixed ones are listed as gone:</p>
+<pre class="cmd">pwsh -NoProfile -Command "&amp; 'Analyze-Deadlocks.ps1' -Path 'after\*.json' -Compare 'analysis\deadlock_patterns.csv'"
+Gone since the comparison run: P1 (18x), P6 (2x)</pre>
+  </article>
+
+  <article class="example" id="ex-dashboard">
+    <h3><span class="exn">5</span> The daily dashboard</h3>
+    <p class="prompt">Run the dashboard.</p>
+    <p><strong>Skill:</strong> sql-daily-dashboard. One command, about two minutes, read-only:</p>
+<pre class="cmd">pwsh -NoProfile -File &lt;plugin&gt;\skills\sql-daily-dashboard\assets\dashboard\Build-Dashboard.ps1 `
+     -Config ~\.sqlserver-dba\dashboard.config.json -Open
+
+  dash_server.sql          AppDb          8.4 s     61,204 chars
+  dash_workload.sql        AppDb         71.9 s    402,118 chars
+  dash_workload.sql        ReportsDb     12.0 s     88,530 chars
+Dashboard: out\Dashboard_2026-11-06_0844.html</pre>
+    <p>An illustration of the top of the page (example numbers):</p>
+    <figure class="dash" aria-label="Illustration of the dashboard header, hourly chart and work board">
+      <div class="dash-verdict"><span class="sev ok">Healthy</span><span>Today 2,250 CPU-min to 14:00, 12% under last week. Look first at: <code>udf_StopDetail</code> (rising, +84 CPU-min/hr), <code>EDI inbound</code> (timeouts 23).</span></div>
+      <div class="dash-kpis">
+        <div><span class="k">Today so far</span><span class="v">2,250</span><span class="u">CPU-min</span></div>
+        <div><span class="k">Week ago</span><span class="v">2,560</span><span class="u">same hours</span></div>
+        <div><span class="k">Baseline</span><span class="v">3,616</span><span class="u">2026-10-16</span></div>
+        <div><span class="k">Whole day, est.</span><span class="v">≈ 3,300</span><span class="u">CPU-min</span></div>
+      </div>
+      <svg viewBox="0 0 640 210" role="img" aria-label="Hourly CPU: today as bars, a week ago as a line">
+        <g class="grid">
+          <line x1="44" y1="20" x2="630" y2="20"/><line x1="44" y1="60" x2="630" y2="60"/><line x1="44" y1="100" x2="630" y2="100"/><line x1="44" y1="140" x2="630" y2="140"/><line x1="44" y1="180" x2="630" y2="180"/>
+        </g>
+        <g class="axis">
+          <text x="38" y="24" text-anchor="end">300</text><text x="38" y="104" text-anchor="end">150</text><text x="38" y="184" text-anchor="end">0</text>
+          <text x="66" y="198" text-anchor="middle">00</text><text x="206" y="198" text-anchor="middle">04</text><text x="346" y="198" text-anchor="middle">08</text><text x="486" y="198" text-anchor="middle">12</text><text x="591" y="198" text-anchor="middle">15</text>
+          <text x="8" y="12">CPU-min per hour</text>
+        </g>
+        <g class="bars">
+          <rect x="54" y="154" width="24" height="26"/><rect x="89" y="159" width="24" height="21"/><rect x="124" y="162" width="24" height="18"/><rect x="159" y="159" width="24" height="21"/>
+          <rect x="194" y="149" width="24" height="31"/><rect x="229" y="128" width="24" height="52"/><rect x="264" y="97" width="24" height="83"/><rect x="299" y="66" width="24" height="114"/>
+          <rect x="334" y="45" width="24" height="135"/><rect x="369" y="37" width="24" height="143"/><rect x="404" y="27" width="24" height="153"/><rect x="439" y="40" width="24" height="140"/>
+          <rect x="474" y="50" width="24" height="130"/><rect x="509" y="45" width="24" height="135"/>
+        </g>
+        <polyline class="line" points="66,151 101,159 136,161 171,156 206,144 241,123 276,89 311,61 346,39 381,32 416,28 451,37 486,49 521,44 556,54 591,63"/>
+        <g class="legend"><rect x="460" y="4" width="12" height="10" class="bars-l"/><text x="476" y="13">today</text><line x1="522" y1="9" x2="540" y2="9" class="line"/><text x="545" y="13">week ago</text></g>
+      </svg>
+      <div class="board">
+        <div><h5>Bubbling up</h5><p><code>udf_StopDetail</code> rising ×4.7</p><p><code>0x0D44…</code> new entrant</p></div>
+        <div><h5>Open</h5><p><code>usp_PrintQueue</code> 80–500 s per refresh</p></div>
+        <div><h5>Ready to deploy</h5><p><code>usp_NotesCheck</code> seek patch, ≈ 3 CPU-min/day</p></div>
+        <div><h5>Done – watch</h5><p><code>usp_ExportBatch</code> 5 s → 3 ms per call</p></div>
+      </div>
+    </figure>
+    <p>Each object's drill-down ends with a request for Claude and the values to put in the tuning scripts. Re-render a saved run without touching the server:</p>
+<pre class="cmd">Build-Dashboard.ps1 -Config ~\.sqlserver-dba\dashboard.config.json -FromJson out\data\dashboard_2026-11-06_0844.json</pre>
+  </article>
+
+  <article class="example" id="ex-vendor">
+    <h3><span class="exn">6</span> A vendor ticket for a failing integration</h3>
+    <p class="prompt">Something keeps failing an UPDATE on the carrier table. Find out who sends it and write it up for the vendor.</p>
+    <p><strong>Skills:</strong> sql-workload-hotspots (steps 5–6: who sends it, why it fails), then sql-findings-report. The cause was a data-type precedence error: <code>COALESCE(@p bigint, column varchar)</code> converts every existing value to bigint, so any non-numeric value fails even when the parameter is NULL. The ticket's sequence diagram:</p>
+    <div class="diagram">
+<pre class="mermaid">
+sequenceDiagram
+  participant EXT as Partner cloud service
+  participant SVC as Connector service (APPHOST, login SVCUSER)
+  participant DB as Production database
+  EXT->>SVC: Carrier change (address, no pay-to)
+  SVC->>DB: UPDATE carrier SET ..., pay_to = COALESCE(@p bigint NULL, pay_to varchar)
+  DB-->>SVC: Msg 8114 varchar to bigint, statement rolled back
+  Note over SVC: Address not saved, retried next cycle
+  Note over DB: ≈ 4,500 failures/day, 50 successes
+</pre>
+    </div>
+    <p>The impact assessment leads with the data – addresses that never get saved – rather than CPU, and the asks are specific: type the parameter to the column, set an Application Name in the connection string, and replay what failed.</p>
+  </article>
+
+  <article class="example" id="ex-setup">
+    <h3><span class="exn">7</span> Setting up a new site</h3>
+    <p class="prompt">Set up the sqlserver-dba site profile for our servers.</p>
+    <p>Claude asks five questions (production servers, main databases, time zone, policies, a baseline day), then writes the profile and an empty ledger. An excerpt of the result:</p>
+<pre class="cmd">## Servers
+| Server / listener | Role                                | Databases                    |
+| SQLPROD01         | PRODUCTION, read-only for Claude    | AppDb (main), ReportsDb      |
+| SQLDEV01          | Dev                                 |                              |
+
+## Policy
+- Query Store forcing / hints: code-first (fix in code, forcing only with approval)
+- Local index prefix MyCo_; change marker "-- MyCo yyyy-mm-dd"; the DBA team deploys
+
+Ledger: findings-ledger.md</pre>
+    <p>Before any commit to the plugin, contributors run the two checks:</p>
+<pre class="cmd">pwsh -File tools/Test-Scrub.ps1           # Clean: 72 files checked against 39 terms.
+pwsh -File tools/Test-ReadOnlyScripts.ps1 # Read-only: 24 SQL and 3 PowerShell files checked.</pre>
+  </article>
+
+  <h3>Turning any write-up into a PDF</h3>
+<pre class="cmd">pwsh -File &lt;plugin&gt;\core\render\render_pdf.ps1 -Html docs\Analysis.html -Screenshot
+PDF: docs\Analysis.pdf (296 KB)
+Screenshot: docs\Analysis.png</pre>
+</section>
+
+<section id="core">
+  <h2>The shared core</h2>
+  <p>Everything every skill relies on lives once, in <code>core/</code>.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>File</th><th>What it holds</th></tr></thead>
+    <tbody>
+      <tr><td><code>site.md</code></td><td>How to find your site folder, and how to set one up by asking a few questions</td></tr>
+      <tr><td><code>safety.md</code></td><td>What may and may not run on production, guardrail behavior, keeping Claude's own footprint small, sqlcmd practicalities, the Query Store policy setting</td></tr>
+      <tr><td><code>number-hygiene.md</code></td><td>Windows and time zones (Query Store is UTC), sources, mixed and partial hours, weighted averages, hedged estimates, visible corrections</td></tr>
+      <tr><td><code>interpretation.md</code></td><td>Conversions (60 CPU-minutes per hour is one busy core) and default thresholds, which your profile can override</td></tr>
+      <tr><td><code>query-store.md</code></td><td>The joins, execution types, gotchas that change conclusions, and matching statements across an upgrade</td></tr>
+      <tr><td><code>fix-catalog.md</code></td><td>19 patterns: symptom → evidence → minimal fix → proof, with measured results</td></tr>
+      <tr><td><code>patch-package.md</code></td><td>Guarded deploy, byte-exact rollback and its traps, parity test, verify script, vendor note</td></tr>
+      <tr><td><code>templates/</code></td><td>Site profile, findings ledger, patch files, analysis, vendor ticket and vendor note, and a DBA-run dedicated deadlock session</td></tr>
+      <tr><td><code>render/</code></td><td>Markdown + mermaid to HTML, and HTML to PDF and screenshot</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="site">
+  <h2>Your site folder</h2>
+  <p>The plugin is generic. What makes the second analysis faster than the first lives in a folder you own: <code>~/.sqlserver-dba/</code>, <code>.sqlserver-dba/</code> in a repository, or any folder named by the <code>SQLSERVER_DBA_SITE</code> environment variable.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td><code>site-profile.md</code></td><td>Production servers, databases, time zone, Query Store settings, permissions the reading login lacks, policies (forcing, index prefix, change marker, who deploys), baseline day, normal levels on this server, workload groups, business processes, vendors</td></tr>
+      <tr><td><code>findings-ledger.md</code></td><td>Done, ready, open and watch, with before → after numbers, owners and script paths. Every skill reads it before reporting and updates it afterwards; the dashboard's work board is built from it</td></tr>
+      <tr><td><code>scrub-denylist.txt</code></td><td>For contributors: the names that must never reach the shared plugin</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><p>No site folder yet? Ask Claude to "set up the sqlserver-dba site profile". It asks for your production servers, main databases, time zone, policies and a baseline day, then fills in the templates. A profile with only the servers and policies is enough to start.</p></div>
+</section>
+
+<section id="safety">
+  <h2>Safety model</h2>
+  <p>A DBA lets Claude look at production because Claude never changes it. The skills keep that cheap to verify.</p>
+  <div class="two">
+    <div class="box may">
+      <h4>Claude may run on production</h4>
+      <ul>
+        <li>SELECT against DMVs, catalog views, Query Store and narrowly filtered business tables</li>
+        <li>Variables, CTEs, session SET options, timed waits for a delta</li>
+        <li>Statistics and showplan around a read-only SELECT version of a statement</li>
+      </ul>
+    </div>
+    <div class="box never">
+      <h4>Claude never runs on production</h4>
+      <ul>
+        <li>Any data or schema change, including temp tables and table variables filled by an insert</li>
+        <li>Procedure calls, Query Store configuration, plan forcing, setting changes</li>
+        <li>Anything that writes: it prepares the script, and a DBA runs it</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Lessons built into the rules</h3>
+  <ul>
+    <li>Every query runs with a timeout, so a runaway read is cancelled instead of burning minutes of CPU.</li>
+    <li>An extended-events ring buffer is cast to a variable once; shredding it inside a CTE re-evaluates the cast per node and can cost minutes of CPU.</li>
+    <li>DMVs are never joined to large user tables in one query; the optimizer has no statistics for DMVs and can scan the table once per session row.</li>
+    <li>Data from application or session hosts comes from a read-only collector the host's admin runs. It runs for a set duration, because hosts may be on another time zone, and writes UTC timestamps.</li>
+    <li>Query Store history is read once per target through a seekable filter (object or query hash). One query over every target read the whole store and hit its timeout.</li>
+    <li>Guardrails scan PowerShell scripts run with <code>-File</code> as well as commands, so the bundled scripts carry no write keywords, even in comments.</li>
+    <li>If a production guardrail hook blocks a command, Claude stops and hands that step to you. It never rewords or splits a command to get past it.</li>
+  </ul>
+  <h3>Every patch ships as seven files</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>File</th><th>Purpose</th><th>Run by</th></tr></thead>
+    <tbody>
+      <tr><td>Rollback</td><td>The live definition byte for byte, as an alter; restores the original hash exactly</td><td>DBA, if needed</td></tr>
+      <tr><td>Patched copy</td><td>The live definition plus the marked lines</td><td>—</td></tr>
+      <tr><td>Guarded deploy</td><td>Stops on the wrong database, a changed hash, already patched, running right now, signed, plan guide, SET options, trigger order</td><td>DBA</td></tr>
+      <tr><td>Parity test</td><td>Original vs patched statement, rows and cost compared</td><td>DBA</td></tr>
+      <tr><td>Verify script</td><td>Read-only: original / patched / changed, plan cache and Query Store before vs after, errors</td><td>Anyone</td></tr>
+      <tr><td>README</td><td>Problem, change, measured results, variants tried, hashes, deploy steps, what to do after upgrades</td><td>—</td></tr>
+      <tr><td>Vendor note</td><td>The change in the vendor's terms, with the permanent fix we suggest</td><td>Sent by you</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="fixes">
+  <h2>Fix catalog</h2>
+  <p>Each pattern came from a real production fix. A selection, with the results measured at the time:</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Pattern</th><th>Minimal fix</th><th>Measured</th></tr></thead>
+    <tbody>
+      <tr><td>Row goal turns an existence check into a scan</td><td><code>FORCESEEK</code> inside the procedure</td><td class="num">≈ 3 s → 0.15 ms per call</td></tr>
+      <tr><td>Eager index spool rebuilt every run</td><td><code>FORCESEEK</code> + <code>OPTION (LOOP JOIN)</code></td><td class="num">49.2 s → 0.11–0.19 s CPU per run</td></tr>
+      <tr><td>Outer-column expression in a seek predicate</td><td>Compute the key once into a variable</td><td class="num">14 → 3 ms per row</td></tr>
+      <tr><td>OR across two join keys</td><td>Split into two seeks (<code>UNION ALL</code> or two <code>EXISTS</code>)</td><td class="num">640 → 3.7 ms per call</td></tr>
+      <tr><td>Converting the column to match a string key</td><td>Add a <code>TRY_CONVERT</code> seek and keep the original test</td><td class="num">≈ 3.4 s → 45 ms per call</td></tr>
+      <tr><td>Scheduled update rewriting every row to the same value</td><td>NULL-safe changed-rows filter, join on the row key</td><td class="num">≈ 528K rows per run → only changed rows</td></tr>
+      <tr><td>A placeholder value held by millions of rows</td><td><code>OPTION (FORCE ORDER, LOOP JOIN)</code> + a guard</td><td class="num">9.4M reads → 33</td></tr>
+      <tr><td>A heap used as a queue</td><td>Clustered index on the consumer's key</td><td class="num">114 → 2 pages per lookup</td></tr>
+      <tr><td>Monitoring query scanning a hot table</td><td>Read-uncommitted count, seekable date test</td><td class="num">16K → 2.3K reads per run</td></tr>
+    </tbody>
+  </table></div>
+  <p>The catalog also covers plan flips at the nightly recompile, implicit conversions from the caller, data-type precedence errors, polling feeds that rescan their whole window, tables that only grow, literal ad hoc SQL, big screens and reports, parallelism, and serializable clients that lock an empty table's key range.</p>
+</section>
+
+<section id="install">
+  <h2>Install and set up</h2>
+  <h3>1. Install the plugin in Claude Code</h3>
+<pre class="cmd">/plugin marketplace add &lt;path or URL of the sqlserver-dba repository&gt;
+/plugin install sqlserver-dba@sqlserver-dba</pre>
+  <p>Or declare it in your Claude Code settings (<code>extraKnownMarketplaces</code> with a directory or git source, and <code>enabledPlugins</code>). Start a new session afterwards. Remove any older standalone copies of similar skills so two skills don't answer the same request.</p>
+  <h3>2. Create your site folder</h3>
+  <p>Ask Claude to set up the site profile, or copy <code>core/templates/site-profile.template.md</code> and <code>findings-ledger.template.md</code> into <code>~/.sqlserver-dba/</code> and fill them in.</p>
+  <h3>3. Grant the reading login</h3>
+  <ul>
+    <li><code>VIEW SERVER STATE</code> and <code>VIEW DATABASE STATE</code> (SQL Server 2022: <code>VIEW SERVER PERFORMANCE STATE</code>)</li>
+    <li><code>VIEW DEFINITION</code> where code fingerprints are wanted</li>
+    <li><code>db_datareader</code> only where business-table metrics are needed</li>
+  </ul>
+  <h3>4. Add a production guardrail (strongly recommended)</h3>
+  <p>A Claude Code hook that blocks write keywords in any command naming a production server. The bundled scripts are written to pass one.</p>
+  <h3>Requirements</h3>
+  <ul>
+    <li>SQL Server 2016 or later with Query Store on; 2019 and 2022 give the best data. Azure SQL Managed Instance mostly works; Azure SQL Database is not supported yet.</li>
+    <li><code>sqlcmd</code> on the machine running Claude, and PowerShell 7 for the dashboard and tools.</li>
+    <li>For PDFs: Edge or Chrome, and internet access to load the markdown and mermaid scripts.</li>
+  </ul>
+</section>
+
+<section id="roadmap">
+  <h2>Roadmap</h2>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Next</th><th>What it adds</th></tr></thead>
+    <tbody>
+      <tr><td><code>sql-release-verification</code></td><td>After a vendor upgrade or hot-fix: what changed, before vs after per statement, result equivalence, and which local patches the upgrade reverted</td></tr>
+      <tr><td><code>sql-client-path-profiler</code></td><td>"Is it the database or the app?" – business throughput from the business table, live session sampling (time in SQL, round trips, client waits), host counters lined up minute by minute, and a verdict</td></tr>
+      <tr><td>Portable guardrail</td><td>A cross-platform PowerShell 7 hook with a configuration file and its own tests</td></tr>
+      <tr><td>Lab and evaluations</td><td>A Docker SQL Server 2022 database seeded with the problems the skills must find, and tests that show each skill helps</td></tr>
+      <tr><td>Public release</td><td>MIT license, after the scrub check and the lab evaluations pass</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Contributing</h3>
+  <ul>
+    <li>No organization-specific names, servers or thresholds in the plugin: run <code>tools/Test-Scrub.ps1</code> before every commit.</li>
+    <li>Every SQL and PowerShell script under <code>skills/</code> stays read-only, without write keywords even in comments: <code>tools/Test-ReadOnlyScripts.ps1</code>.</li>
+    <li>Keep each skill file short; put detail in its references or the core, and explain why a rule exists.</li>
+  </ul>
+</section>
+
+<footer>sqlserver-dba 0.2.0 · internal release, November 2026</footer>
+</main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose', flowchart: { htmlLabels: true } });</script>
+</body>
+</html>

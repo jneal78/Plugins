@@ -11,7 +11,7 @@ Each skill's `SKILL.md` names the core files it needs. From a skill's folder the
 | `query-store.md` | Query Store and plan-cache field guide, gotchas, matching across a change | Any Query Store query |
 | `fix-catalog.md` | Symptom → evidence → minimal fix → proof, with measured results | Choosing a fix |
 | `patch-package.md` | Guarded deploy, exact rollback, parity, verify, README, vendor note | Packaging any change for a DBA to run |
-| `templates/` | Site profile, findings ledger, patch files, analysis / vendor ticket / vendor note | Creating any of those |
+| `templates/` | Site profile, findings ledger, patch files, analysis / vendor ticket / vendor note, a DBA-run dedicated deadlock session | Creating any of those |
 | `render/` | Markdown + mermaid → HTML shell, and a headless Edge/Chrome PDF script | Turning a write-up into HTML/PDF |
 
 Rules for editing the core:

@@ -1,7 +1,7 @@
 {
   "name": "sqlserver-dba",
-  "version": "0.1.0",
-  "description": "Read-only SQL Server performance and reliability skills for DBAs: health checks, workload hotspots, query tuning with proven minimal fixes, a daily dashboard and clear write-ups, sharing one core of safety rules, a site profile and a findings ledger.",
+  "version": "0.2.0",
+  "description": "Read-only SQL Server performance and reliability skills for DBAs: health checks, workload hotspots, query tuning with proven minimal fixes, deadlock analysis down to root cause and upstream driver, a daily dashboard and clear write-ups, sharing one core of safety rules, a site profile and a findings ledger.",
   "author": { "name": "sqlserver-dba contributors" },
   "license": "MIT",
   "keywords": ["sql-server", "dba", "performance", "query-store", "tuning", "deadlocks"]

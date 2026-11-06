@@ -13,6 +13,8 @@ Every sqlserver-dba skill reads this before its first server query (see `core/si
 - Query Store: interval `<60>` min, max size `<n>` MB, `max_plans_per_query` `<n>`, capture mode `<AUTO>`
 - Reading login lacks: `<VIEW ANY DATABASE / msdb / VIEW SERVER STATE>` (expect NULL names)
 - `system_health` event files: `<full path, e.g. D:\MSSQL\Log\system_health*.xel>` (they reach back about `<n>` hours)
+- Dedicated deadlock session: `<none | name, created on every replica>`; a monitoring product that keeps deadlock graphs: `<none | product, how to export .xdl>`
+- Application tables that log deadlock victims (error 1205): `<none | schema.table, columns for error number, procedure and date>`
 
 ## Policy
 
