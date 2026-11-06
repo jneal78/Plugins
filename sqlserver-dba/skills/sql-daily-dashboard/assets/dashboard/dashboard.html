@@ -1,0 +1,1308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SQL Server daily workload</title>
+<script src="data.js"></script><!--DEV-->
+<script src="model.js"></script><!--MODEL-->
+<style>
+/* ---- tokens: color means status; everything else is ink on surface */
+:root {
+  color-scheme: light;
+  --page: #f4f4f1; --surface: #fff; --sunk: #f7f7f4;
+  --ink: #141413; --ink-2: #4f4e4a; --ink-3: #807e77;
+  --line: #e3e2db; --axis: #c2c0b6; --ring: rgba(10,10,10,.10);
+  --today: #2a72cc; --today-soft: #d9e6f7; --week: #3b3a37; --base: #8f8d86;
+  --ok: #138a13; --warn: #d48f00; --crit: #cc3434;
+  --ok-ink: #0b6b0b; --bad-ink: #b02a2a; --warn-ink: #855600;
+  --ok-bg: #e4f3e4; --warn-bg: #fcf1d8; --crit-bg: #fae4e3; --info-bg: #eceef2;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r: 8px; --panel-w: min(720px, 94vw);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0f0f0e; --surface: #1a1a19; --sunk: #141413;
+    --ink: #f0efec; --ink-2: #c4c3bb; --ink-3: #8f8d86;
+    --line: #2d2d2a; --axis: #4a4943; --ring: rgba(255,255,255,.10);
+    --today: #4b93ea; --today-soft: #1e3352; --week: #d9d7cf; --base: #8f8d86;
+    --ok: #2fb52f; --warn: #f2ad1c; --crit: #e86a6a;
+    --ok-ink: #5ccf5c; --bad-ink: #f29191; --warn-ink: #f6bd45;
+    --ok-bg: #15301a; --warn-bg: #33290f; --crit-bg: #3b1d1d; --info-bg: #24252b;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: inherit; }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--today); outline-offset: 2px; }
+.num, td.n, th.n { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.muted { color: var(--ink-3); }
+.wrap { max-width: 1560px; margin: 0 auto; padding: 0 24px; }
+.panel { background: var(--surface); border: 1px solid var(--ring); border-radius: var(--r); }
+h2 { font-size: 15px; margin: 0; }
+h3 { font-size: 13.5px; margin: 0; }
+.win { font-size: 12px; color: var(--ink-3); margin: 1px 0 8px; }
+.empty { font-size: 12.5px; color: var(--ink-3); padding: 8px 2px; }
+.up-txt { color: var(--bad-ink); } .dn-txt { color: var(--ok-ink); }
+.tag-est { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; border: 1px solid var(--axis); color: var(--ink-2); border-radius: 4px; padding: 0 4px; margin-left: 4px; vertical-align: 1px; }
+
+/* ---- persistent header */
+.top { background: var(--surface); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 8px 16px; min-height: 50px; flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+.top .title { font-weight: 650; font-size: 15px; }
+.top .srv { color: var(--ink-2); font-size: 13px; }
+.top .asof { margin-left: auto; color: var(--ink-2); font-size: 13px; }
+.windows { flex-basis: 100%; font-size: 12px; color: var(--ink-3); margin-top: -4px; }
+.windows b { color: var(--ink-2); font-weight: 600; }
+.unitsw { margin-left: 8px; vertical-align: middle; }
+.unitsw button { padding: 1px 9px; font-size: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; padding: 2px; background: var(--sunk); }
+.seg button { border: 0; background: none; padding: 3px 11px; border-radius: 5px; cursor: pointer; font-size: 13px; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--ring); }
+.badge { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 17px; text-align: center; background: var(--info-bg); color: var(--ink-2); }
+.badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.badge.alert { background: var(--crit-bg); color: var(--bad-ink); }
+
+.brief { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 14px; }
+.verdict { padding: 14px 18px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; }
+.dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 6px; grid-row: 1 / span 2; }
+.verdict > :not(.dot) { grid-column: 2; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.alert { background: var(--crit); }
+.v-head { font-size: 19px; font-weight: 650; line-height: 1.35; margin: 0; }
+.v-sub { margin: 2px 0 0; color: var(--ink-2); }
+.v-look { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.v-look .lh { font-weight: 650; margin-bottom: 2px; }
+.v-look ol { margin: 0; padding-left: 22px; }
+.v-look li { margin: 3px 0; color: var(--ink-2); }
+.v-look li::marker { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.v-look a { text-decoration: none; border-bottom: 1px solid var(--axis); }
+.v-look a:hover { border-color: var(--ink); }
+.v-look .o { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.v-look .also { color: var(--ink-3); font-size: 12.5px; margin-top: 4px; }
+.tag { display: inline-block; font-size: 11px; font-weight: 600; border: 1px solid var(--axis); border-radius: 4px; padding: 0 5px; margin-right: 6px; color: var(--ink-2); line-height: 16px; }
+.tag.tag-biz { background: var(--crit-bg); color: var(--bad-ink); border-color: transparent; }
+
+/* board summary: one row, counts, CPU and owners per column */
+.bsum { display: grid; grid-template-columns: auto repeat(4, minmax(0, 1fr)); align-items: stretch; }
+.bsum > * { padding: 7px 12px; min-width: 0; }
+.bsum .bs-h { font-weight: 650; font-size: 13px; align-self: center; white-space: nowrap; }
+.bsum .bs-h .muted { display: block; font-weight: 400; font-size: 11.5px; }
+.bs-col { border: 0; border-left: 1px solid var(--line); background: none; text-align: left; cursor: pointer; font-size: 12.5px; }
+.bs-col:hover { background: var(--sunk); }
+.bs-col .n { font-weight: 650; font-variant-numeric: tabular-nums; margin-left: 4px; }
+.bs-col .ow { display: block; font-size: 11.5px; color: var(--ink-3); }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 0; padding: 0; }
+.kpi { padding: 9px 14px 10px; min-width: 0; }
+.kpi + .kpi { border-left: 1px solid var(--line); }
+.kpi .lbl { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.kpi .val { font-size: 21px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.kpi .val small { font-size: 12px; font-weight: 400; color: var(--ink-3); margin-left: 3px; }
+.kpi .cmp { display: grid; grid-template-columns: auto 1fr auto; gap: 0 6px; font-size: 12px; white-space: nowrap; color: var(--ink-3); margin-top: 2px; }
+.kpi .cmp .num { text-align: right; color: var(--ink-2); }
+.kpi.est { background: var(--sunk); border-radius: 0 var(--r) var(--r) 0; }
+.kpi.est .lbl { white-space: normal; }
+.kpi .cmp .how { grid-column: 1 / -1; white-space: normal; }
+.kpi .cores { font-size: 12px; color: var(--ink-2); }
+
+.health { padding: 8px 14px; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 13px; }
+.health .hl { font-weight: 600; margin-right: 4px; }
+.check { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; max-width: 100%; min-width: 0; font-size: 12.5px; padding: 2px 9px; border-radius: 6px; background: var(--sunk); color: var(--ink-2); border: 1px solid var(--line); }
+.check b { font-weight: 600; color: var(--ink); }
+.check.warn { background: var(--warn-bg); border-color: transparent; }
+.check.alert { background: var(--crit-bg); border-color: transparent; }
+.sdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; align-self: center; }
+.sdot.ok { background: var(--ok); } .sdot.warn { background: var(--warn); } .sdot.alert { background: var(--crit); }
+.linkbtn { border: 0; background: none; padding: 0; color: var(--today); cursor: pointer; font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; }
+.hgrid { flex-basis: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 2px 18px; padding-top: 6px; border-top: 1px solid var(--line); margin-top: 4px; }
+.hgrid div { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; padding: 2px 0; }
+.hgrid .a { min-width: 150px; color: var(--ink-2); }
+.hgrid .nt { color: var(--ink-3); font-size: 11.5px; }
+
+/* ---- tabs */
+.tabbar { position: sticky; top: 0; z-index: 10; background: var(--page); margin-top: 12px; border-bottom: 1px solid var(--line); }
+.tabs { display: flex; gap: 2px; align-items: flex-end; }
+.tab { border: 0; background: none; padding: 9px 14px 8px; cursor: pointer; font-size: 14px; color: var(--ink-2); border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; gap: 7px; align-items: center; }
+.tab:hover { color: var(--ink); }
+.tab[aria-selected="true"] { color: var(--ink); font-weight: 650; border-bottom-color: var(--today); }
+.tab .k { font-size: 10.5px; color: var(--ink-3); font-weight: 400; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
+.tabbar .hint { margin-left: auto; font-size: 12px; color: var(--ink-3); padding-bottom: 9px; }
+main { padding-top: 18px; padding-bottom: 30px; }
+.view[hidden] { display: none; }
+.sect-head { display: flex; align-items: baseline; gap: 12px; margin: 18px 0 8px; flex-wrap: wrap; }
+.sect-head:first-child { margin-top: 0; }
+.sect-head .hint { color: var(--ink-3); font-size: 12.5px; }
+.box { padding: 12px 14px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr); gap: 12px; }
+
+/* ---- charts */
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; flex-wrap: wrap; }
+.legend i { display: inline-block; vertical-align: middle; margin-right: 5px; }
+.lg-bar { width: 10px; height: 10px; border-radius: 2px; background: var(--today); }
+.lg-line { width: 16px; height: 0; border-top: 2px solid var(--week); }
+.lg-dash { width: 16px; height: 0; border-top: 2px dashed var(--base); }
+.lg-meter { width: 12px; height: 0; border-top: 3px solid var(--ink-2); border-radius: 2px; }
+.lg-proj { width: 10px; height: 10px; border: 1.5px dashed var(--today); border-radius: 2px; }
+.lg-wk { width: 10px; height: 10px; border-radius: 2px; background: var(--week); }
+.lg-hatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--base); background: repeating-linear-gradient(45deg, var(--base) 0 1.5px, transparent 1.5px 4px); }
+.lg-tick { width: 0; height: 11px; border-left: 2px solid var(--week); margin-left: 3px; }
+.lg-tick.bl { border-left: 2px dotted var(--base); }
+svg .b-week { fill: var(--week); }
+svg .b-base { fill: url(#hatch-base); stroke: var(--base); stroke-width: 1; }
+svg text { fill: var(--ink-3); font-size: 10.5px; font-family: system-ui, "Segoe UI", sans-serif; }
+svg .grid { stroke: var(--line); stroke-width: 1; }
+svg .axis { stroke: var(--axis); stroke-width: 1; }
+svg .b-today { fill: var(--today); }
+svg .b-soft { fill: var(--today-soft); }
+svg .l-week { stroke: var(--week); stroke-width: 2; fill: none; }
+svg .l-base { stroke: var(--base); stroke-width: 1.6; stroke-dasharray: 4 3; fill: none; }
+svg .d-week { fill: var(--week); stroke: var(--surface); stroke-width: 1.5; }
+svg .m-meter { stroke: var(--ink-2); stroke-width: 3; stroke-linecap: round; }
+svg .hit { fill: transparent; }
+svg .hit:hover { fill: var(--ink); fill-opacity: .05; }
+.chart { width: 100%; display: block; }
+
+/* ---- tables */
+table { border-collapse: collapse; width: 100%; }
+.rows th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--ink-3); padding: 4px 7px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: bottom; }
+.rows td { padding: 6px 7px; border-bottom: 1px solid var(--line); font-size: 12.5px; vertical-align: middle; }
+.rows tr:last-child td { border-bottom: 0; }
+.rows th.n, .rows td.n { text-align: right; white-space: nowrap; }
+.rows .sub { display: block; font-size: 11px; color: var(--ink-3); font-weight: 400; }
+.rows tr.click { cursor: pointer; }
+.rows tr.click:hover td { background: var(--sunk); }
+.rows a { text-decoration: none; }
+.rows a:hover { text-decoration: underline; }
+.rows .o { font-family: var(--mono); font-size: 12px; }
+.gbtn { border: 0; background: none; padding: 0; cursor: pointer; font-weight: 600; text-align: left; }
+.gbtn:hover { text-decoration: underline; }
+.bullet { position: relative; height: 12px; min-width: 90px; }
+.bullet .b { position: absolute; left: 0; top: 2px; height: 8px; background: var(--today); border-radius: 0 2px 2px 0; }
+.bullet .t { position: absolute; top: 0; width: 0; height: 12px; border-left: 2px solid var(--week); }
+.bullet .t.bl { border-left: 2px dotted var(--base); }
+.biz { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0 8px; font-size: 12px; line-height: 1.5; }
+.biz .l { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.biz .alarm { color: var(--bad-ink); font-weight: 600; }
+.eff { font-size: 12px; line-height: 1.5; white-space: nowrap; }
+.int-tbl td { vertical-align: top; }
+.int-tbl td.mid { vertical-align: middle; }
+
+.heat td.cell { text-align: center; font-size: 11.5px; padding: 5px 2px; border: 2px solid var(--surface); border-radius: 4px; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.heat td.cell.hot { color: #fff; }
+.heat th { font-size: 11px; font-weight: 600; color: var(--ink-3); padding: 2px; text-align: center; }
+.heat th.l, .heat th.g { text-align: left; }
+.heat th.g { font-size: 12.5px; color: var(--ink); padding-right: 10px; white-space: nowrap; }
+.heat td.tot { width: 72px; text-align: right; font-size: 12px; padding: 4px 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.heat tr.all th, .heat tr.all td { border-top: 1px solid var(--line); font-weight: 600; }
+.heat-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.heat-head .seg { margin-left: auto; }
+.scale { font-size: 11.5px; color: var(--ink-3); display: inline-flex; gap: 6px; align-items: center; }
+.scale i { display: inline-block; width: 90px; height: 8px; border-radius: 2px; }
+
+/* ---- chips */
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 4px; background: var(--info-bg); color: var(--ink-2); white-space: nowrap; line-height: 18px; }
+.chip.bad { background: var(--crit-bg); color: var(--bad-ink); }
+.chip.watch { background: var(--warn-bg); color: var(--warn-ink); }
+.chip.st-bubbling { background: var(--warn-bg); color: var(--warn-ink); }
+.chip.st-open { background: none; border: 1px solid var(--axis); color: var(--ink-2); font-weight: 500; line-height: 16px; }
+.chip.st-ready { background: none; border: 1px solid var(--today); color: var(--today); line-height: 16px; }
+.chip.st-done { background: var(--ok-bg); color: var(--ok-ink); }
+.chip.st-watch { background: var(--crit-bg); color: var(--bad-ink); }
+.chip.rw { background: var(--info-bg); color: var(--ink-2); font-weight: 500; }
+.chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+
+/* ---- board */
+.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.col { background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; min-width: 0; }
+.col-head { display: flex; align-items: baseline; gap: 8px; padding: 2px 2px 2px; }
+.col-head h3 { font-size: 14px; }
+.col-head .sum { margin-left: auto; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.col-sub { font-size: 12px; color: var(--ink-3); margin: 0 2px 8px; }
+.cards { display: grid; gap: 8px; }
+.card { display: block; min-width: 0; overflow: hidden; text-decoration: none; background: var(--surface); border: 1px solid var(--ring); border-radius: 7px; padding: 9px 10px 8px; cursor: pointer; }
+.card:hover { border-color: var(--axis); }
+.card.sel { box-shadow: 0 0 0 2px var(--today); }
+.c-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.c-top .obj { font-family: var(--mono); font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.rank { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-2); background: var(--info-bg); border-radius: 4px; padding: 0 4px; }
+.grp { margin-left: auto; flex: none; font-size: 11px; color: var(--ink-3); max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-mid { display: flex; align-items: flex-end; gap: 10px; margin-top: 5px; }
+.c-val { flex: 1; min-width: 0; }
+.c-val b { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.c-val .u { font-size: 11.5px; color: var(--ink-3); margin-left: 3px; }
+.c-val .dl { display: block; font-size: 12px; }
+.spark svg { display: block; }
+.spark .sc { display: block; font-size: 10px; color: var(--ink-3); text-align: center; margin-top: 1px; white-space: nowrap; }
+.owner .muted { font-style: italic; }
+.sigs { list-style: none; margin: 7px 0 0; padding: 0; display: grid; gap: 3px; }
+.sigs li { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: var(--ink-2); line-height: 1.3; }
+.sigs .chip { flex: none; }
+.owner { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
+.owner b { font-weight: 600; color: var(--ink); }
+.cand-line { font-size: 11.5px; color: var(--ink-3); margin-top: 5px; border-top: 1px dashed var(--line); padding-top: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.score { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 11px; color: var(--ink-3); }
+.score .track { flex: 1; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.score .fill { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; }
+.more { margin-top: 8px; width: 100%; border: 1px dashed var(--axis); background: none; border-radius: 6px; padding: 5px; cursor: pointer; font-size: 12px; color: var(--ink-2); }
+details.fold { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+details.fold summary { cursor: pointer; }
+details.fold ul { margin: 6px 0 0; padding-left: 16px; }
+.quietlist { margin-top: 14px; }
+.quietlist .box { background: var(--sunk); }
+
+/* ---- objects tab */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.fchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 1px 9px; cursor: pointer; font-size: 12px; color: var(--ink-2); display: inline-flex; gap: 5px; align-items: center; }
+.fchip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.fchip:disabled { opacity: .45; cursor: default; }
+.fchip .n { font-size: 11px; opacity: .8; }
+.filters select, .filters input { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; }
+.filters input { width: 230px; }
+.filters .count { margin-left: auto; font-size: 12px; color: var(--ink-3); }
+.vsep { width: 1px; height: 20px; background: var(--line); }
+.fbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--today-soft); border-radius: var(--r) var(--r) 0 0; font-size: 12.5px; }
+.fbar details { flex-basis: 100%; }
+.fbar summary { cursor: pointer; color: var(--ink-2); }
+.otbl th.sortable { cursor: pointer; }
+.otbl th.sortable:hover { color: var(--ink); }
+.otbl th[aria-sort="ascending"]::after { content: " ▲"; }
+.otbl th[aria-sort="descending"]::after { content: " ▼"; }
+.otbl tbody tr { cursor: pointer; }
+.otbl tbody tr:hover td { background: var(--sunk); }
+.otbl tbody tr.sel td { background: var(--today-soft); }
+.otbl td.ob { max-width: 330px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+.otbl td.gr { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.otbl tr.quiet td { color: var(--ink-3); }
+.hgrid2 td.c, .hgrid2 th.c { text-align: center; font-size: 11.5px; padding: 4px 2px; font-variant-numeric: tabular-nums; }
+.hgrid2 td.c.tot, .hgrid2 th.c.tot { text-align: right; padding-right: 6px; font-weight: 600; }
+.hgrid2 td:first-child { white-space: nowrap; font-size: 12px; padding-right: 10px; color: var(--ink-2); }
+.hgrid2 tr.today td:first-child { color: var(--ink); font-weight: 600; }
+.hgrid2 tr.sep td { border-top: 1px solid var(--line); }
+.hgrid2 .fnt { color: var(--ink-3); font-size: 10.5px; }
+.keys { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; background: var(--surface); }
+
+/* ---- changes tab */
+.row-ch { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; }
+.div-bar { position: relative; height: 10px; min-width: 120px; }
+.div-bar .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; border-left: 1px solid var(--axis); }
+.div-bar .b { position: absolute; top: 1px; height: 8px; }
+.div-bar .b.up { background: var(--crit); opacity: .75; border-radius: 0 2px 2px 0; }
+.div-bar .b.dn { background: var(--ok); opacity: .75; border-radius: 2px 0 0 2px; }
+.stl { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.kind.up, .kind.new { color: var(--bad-ink); } .kind.down, .kind.gone { color: var(--ok-ink); }
+.cand-tbl td.it { max-width: 520px; }
+.cand-tbl td.it span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ---- drill-down panel */
+.drill { position: fixed; top: 0; right: 0; bottom: 0; width: var(--panel-w); background: var(--page); z-index: 30; overflow: auto; border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(0,0,0,.16); }
+.drill[hidden] { display: none; }
+.dr-head { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); padding: 10px 16px 10px; }
+.dr-bar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.dr-bar .kick { font-size: 12px; color: var(--ink-3); margin-right: auto; }
+.dr-head h2 { font-family: var(--mono); font-size: 16px; margin: 6px 0 6px; word-break: break-all; }
+.dr-head h2:focus { outline: none; }
+.dr-acts { margin-top: 8px; }
+.dr-acts .pos { font-size: 12px; color: var(--ink-3); margin: 0 auto 0 4px; }
+.dr-head .tags { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12.5px; white-space: nowrap; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--axis); }
+.btn.pri { background: var(--today); border-color: var(--today); color: #fff; }
+.btn[disabled] { opacity: .4; cursor: default; }
+.dr-body { display: grid; gap: 12px; padding: 12px 16px 30px; }
+.dr-body .box h3 { margin-bottom: 1px; }
+.box-head { display: flex; align-items: center; gap: 8px; }
+.box-head .btn { margin-left: auto; }
+.kv { width: 100%; }
+.kv th, .kv td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--line); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.kv th:first-child, .kv td:first-child { text-align: left; padding-left: 0; }
+.kv thead th { font-weight: 600; font-size: 11.5px; color: var(--ink-3); vertical-align: bottom; }
+.kv thead th small { display: block; font-weight: 400; }
+.kv tbody tr:first-child td { font-weight: 650; }
+.worked { font-size: 12.5px; color: var(--ink-2); margin-top: 8px; padding: 6px 8px; background: var(--sunk); border-radius: 6px; font-variant-numeric: tabular-nums; }
+.worked b { color: var(--ink); }
+.stmt { border-top: 1px solid var(--line); padding: 8px 0 6px; }
+.stmt:first-of-type { border-top: 0; }
+.stmt .sh { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: baseline; }
+.stmt .sh b { color: var(--ink); }
+.stmt summary { cursor: pointer; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
+pre.code { margin: 6px 0 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; max-height: 260px; overflow: auto; }
+.fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; font-size: 12.5px; margin: 6px 0 0; }
+.fields dt { color: var(--ink-3); }
+.fields dd { margin: 0; word-break: break-word; }
+.param { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.param:last-child { border-bottom: 0; }
+.param .s { font-size: 12px; color: var(--ink-2); }
+.param code { font-family: var(--mono); font-size: 12px; grid-column: 1; word-break: break-all; }
+.param .btn { grid-row: 1 / span 2; grid-column: 2; }
+.note { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
+
+#tip { position: fixed; z-index: 50; pointer-events: none; background: var(--ink); color: var(--surface); font-size: 12px; padding: 5px 8px; border-radius: 5px; max-width: 320px; white-space: pre-line; display: none; }
+.foot { margin: 20px 0 0; font-size: 12px; color: var(--ink-3); }
+
+@media (min-width: 1900px) {
+  /* room for both: the page slides left while the drill-down is open */
+  body.drilling .wrap { margin-right: calc(var(--panel-w) + 8px); }
+}
+@media (max-width: 1360px) {
+  .wrap { padding: 0 16px; }
+  .kpi { padding: 8px 10px 9px; }
+  .row-ch { grid-template-columns: 1fr; }
+  .int-tbl .hide-n { display: none; }
+}
+@media (max-width: 1000px) {
+  .row2, .board { grid-template-columns: 1fr 1fr; }
+}
+/* Print: page 1 is the stand-up sheet (header with windows and data time, verdict, Look first at, board summary,
+   KPIs, checks, integrations); the pages after it list top objects and statement movers per database. */
+#print-extra { display: none; }
+@media print {
+  @page { size: landscape; margin: 8mm; }
+  :root { color-scheme: light; }
+  body { background: #fff; font-size: 10.5px; zoom: .84; }
+  .kpi .cmp .how, .kpi .cores { display: none; }
+  .v-look .linkbtn { display: inline !important; color: inherit; text-decoration: none; font-size: inherit; }
+  .tabbar, .drill, #tip, .btn, .more, .seg, .linkbtn, .no-print, .view { display: none !important; }
+  #view-today { display: block !important; padding-top: 0; }
+  #view-today > :not(.pr-keep) { display: none !important; }
+  main { padding: 0; }
+  .wrap { max-width: none; padding: 0; }
+  .top .wrap { min-height: 0; padding: 0 0 4px; }
+  .brief { gap: 5px; margin-top: 6px; }
+  .verdict { padding: 7px 10px; }
+  .v-head { font-size: 15px; }
+  .v-look { margin-top: 4px; padding-top: 4px; }
+  .v-look li { margin: 1px 0; }
+  .bsum > * { padding: 4px 8px; }
+  .health { padding: 4px 10px; }
+  .panel, .card, tr { break-inside: avoid; box-shadow: none; }
+  .sect-head { margin: 8px 0 4px; }
+  .sect-head, h2, h3 { break-after: avoid; }
+  .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .kpi { padding: 4px 8px; }
+  .kpi .val { font-size: 15px; }
+  .box { padding: 6px 8px; }
+  .rows td { padding: 2px 5px; font-size: 10.5px; }
+  .rows th { padding: 2px 5px; }
+  .int-tbl .hide-n { display: none; }
+  #print-extra { display: block; break-before: page; }
+  #print-extra .pg + .pg { break-before: page; }
+  .foot { margin-top: 8px; }
+}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap" id="hdr"></div></header>
+<div class="wrap">
+  <section class="brief" aria-label="Summary">
+    <div class="panel verdict" id="verdict" role="status"></div>
+    <div class="panel bsum" id="bsum" aria-label="Work board summary"></div>
+    <div class="panel kpis" id="kpis" aria-label="Key figures"></div>
+    <div class="panel health" id="health" aria-label="Server checks"></div>
+  </section>
+</div>
+<nav class="tabbar" aria-label="Views"><div class="wrap tabs" role="tablist" id="tabs"></div></nav>
+<main class="wrap">
+  <section class="view" id="view-today" role="tabpanel" aria-labelledby="tab-today"></section>
+  <section class="view" id="view-board" role="tabpanel" aria-labelledby="tab-board" hidden></section>
+  <section class="view" id="view-objects" role="tabpanel" aria-labelledby="tab-objects" hidden></section>
+  <section class="view" id="view-changes" role="tabpanel" aria-labelledby="tab-changes" hidden></section>
+  <section id="print-extra" aria-hidden="true"></section>
+  <p class="foot" id="foot"></p>
+</main>
+<aside class="drill" id="drill" aria-labelledby="dr-title" hidden></aside>
+<div id="tip" role="tooltip"></div>
+
+<script>
+const RAW = /*__DASHBOARD_DATA__*/null || window.DASH_DATA;
+(function () {
+  'use strict';
+  const M = DashModel.build(RAW);
+  const meta = M.meta, TH = meta.thresholds || {};
+  const HOURS = Array.from({ length: meta.hours || 0 }, (_, i) => i);
+  const VIEWS = [
+    { k: 'today', t: 'Today' }, { k: 'board', t: 'Work board' }, { k: 'objects', t: 'Objects' }, { k: 'changes', t: 'Changes' }
+  ];
+  const STAGES = [
+    { k: 'bubbling', t: 'Bubbling up', sub: 'Not on the candidate list, and getting worse or new in the top ' + meta.topN },
+    { k: 'open', t: 'Open', sub: 'On the candidate list, fix not ready yet' },
+    { k: 'ready', t: 'Ready to deploy', sub: 'Fix prepared; the DBA runs it' },
+    { k: 'watch', t: 'Done – watch', sub: 'Fixed items showing a worsening signal again' }
+  ];
+  const STAGE_LABEL = { bubbling: 'bubbling up', open: 'open', ready: 'ready to deploy', watch: 'done – watch', done: 'done', untracked: 'large, untracked' };
+  const FLAG_LABEL = { rising: 'rising', slower: 'slower per call', 'more-calls': 'more calls', timeouts: 'timeouts', errors: 'errors', 'new-entrant': 'new in top ' + meta.topN, 'many-plans': 'many plans', untracked: 'untracked' };
+  const FLAG_ORDER = ['rising', 'slower', 'more-calls', 'timeouts', 'errors', 'new-entrant', 'many-plans', 'untracked'];
+  const FLAG_TONE = { rising: 'bad', slower: 'bad', timeouts: 'bad', errors: 'bad', 'more-calls': 'watch', 'new-entrant': 'watch' };
+  // the model's score weights, shown in the drill-down so the score can be checked by hand
+  const WEIGHT = { rising: 0.5, slower: 0.5, 'more-calls': 0.25, untracked: 0.25, 'new-entrant': 0.25, timeouts: 0.25, errors: 0.25 };
+
+  const state = {
+    view: 'today', db: 0, drill: null, heat: 'c', healthOpen: false, boardMore: {}, unit: 'min',
+    obj: { scope: 'focus', flags: {}, grp: '', q: '', sort: { k: 'score', dir: -1 }, rows: [], sel: null }
+  };
+  let copyTexts = [];
+
+  // ---- formatting
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const nf = (v, d) => (v == null || !isFinite(v)) ? '–' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
+  // CPU unit (the header switch): CPU-minutes, or % of the server = CPU-min ÷ (logical CPUs × minutes in the span) × 100.
+  // cpu(v) is a total over today's window; cpu(v, 60) one hour; cpu(v, 1440) a whole day. Scores, copied requests,
+  // candidate rows and thresholds stay in CPU-min (cpuMin), so what gets pasted or filed never depends on the switch.
+  const NCPU = +meta.cpu_count || 0, WIN = (meta.hours || 0) * 60, HOUR = 60, DAY = 1440;
+  const isPct = () => state.unit === 'pct' && NCPU > 0;
+  const cpuMin = v => nf(v, Math.abs(v) < 100 ? 1 : 0);
+  const pctFmt = p => { const a = Math.abs(p); return a === 0 ? '0%' : a < 0.005 ? '<0.01%' : nf(p, a >= 10 ? 0 : a >= 1 ? 1 : 2) + '%'; };
+  const cpuV = (v, mins) => isPct() ? 100 * v / (NCPU * (mins || WIN)) : v;
+  const fmtU = x => isPct() ? pctFmt(x) : cpuMin(x);
+  const cpu = (v, mins) => fmtU(cpuV(v, mins));
+  const UL = () => isPct() ? 'of server' : 'CPU-min';          // after a value: "8.3% of server", "120 CPU-min"
+  const UH = () => isPct() ? '% of server' : 'CPU-min';        // column headers and chart units
+  const UPH = () => isPct() ? '% of server in each hour' : 'CPU-min in each hour';
+  const ms =v => v == null ? '–' : nf(v, v < 1 ? 2 : v < 10 ? 1 : 0);
+  const big = v => v == null ? '–' : v >= 1e9 ? nf(v / 1e9, 1) + ' B' : v >= 1e6 ? nf(v / 1e6, 1) + ' M' : v >= 1e4 ? nf(v / 1e3, 0) + ' k' : nf(v);
+  const pad2 = h => (h < 10 ? '0' : '') + h;
+  const winTxt = () => '00:00–' + pad2(meta.hours) + ':00';
+  const dayTxt = iso => { const d = new Date(iso + 'T12:00:00'); return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }); };
+  const pctOf = (c, a) => a > 0 ? 100 * (c - a) / a : null;
+  const sum = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
+  const plain = s => String(s || '').replace(/`/g, '').replace(/\*\*/g, '');
+  const plural = (n, w, ws) => nf(n) + ' ' + (n === 1 ? w : (ws || w + 's'));
+  const cur = () => M.dbs[state.db];
+  const hashObj = (db, o) => '#drill=' + encodeURIComponent(db.name) + '|' + encodeURIComponent(o.obj);
+
+  // Change vs a reference. Big jumps as a ratio (26×), small ones as a percentage. good: 'low' (less is better), 'high', 'none'.
+  function dlt(c, a, good) {
+    good = good || 'low';
+    if (!(a > 0)) return c > 0 ? '<span class="' + (good === 'low' ? 'up-txt' : 'muted') + '">new</span>' : '<span class="muted">–</span>';
+    const p = pctOf(c, a), better = good === 'high' ? p > 0 : p < 0;
+    const cls = good === 'none' || Math.abs(p) < 10 ? 'muted' : better ? 'dn-txt' : 'up-txt';
+    const arrow = Math.abs(p) < 0.5 ? '' : p > 0 ? '▲ ' : '▼ ';
+    if (c / a >= 2) return '<span class="' + cls + '" title="' + nf(p) + '% more">' + arrow + DashModel.fmtRatio(c, a) + '</span>';
+    return '<span class="' + cls + '">' + arrow + (p > 0 ? '+' : p < 0 ? '−' : '') + nf(Math.abs(p), Math.abs(p) < 10 ? 1 : 0) + '%</span>';
+  }
+  function niceMax(v) {
+    if (!(v > 0)) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+    return 10 * p;
+  }
+  function copyBtn(text, label, cls) {
+    copyTexts.push(text);
+    return '<button type="button" class="btn ' + (cls || '') + '" data-copy="' + (copyTexts.length - 1) + '" data-label="' + esc(label) + '">' + esc(label) + '</button>';
+  }
+  // the plain-English "why" for one object: worsening signals first, in the model's flag order
+  function phrase(o, f) {
+    if (f === 'rising') return 'CPU ' + DashModel.fmtRatio(o.c.cpu_min, o.a.cpu_min) + ' a week ago';
+    if (f === 'slower') return 'CPU per call ' + DashModel.fmtRatio(o.c.cpu_ms, o.a.cpu_ms) + ' a week ago';
+    if (f === 'more-calls') return 'calls ' + DashModel.fmtRatio(o.c.execs, o.a.execs) + ' a week ago';
+    if (f === 'timeouts') return plural(o.c.timeouts, 'timeout') + ' (' + nf(o.a.timeouts) + ' a week ago)';
+    if (f === 'errors') return plural(o.c.errors, 'error') + ' (' + nf(o.a.errors) + ' a week ago)';
+    if (f === 'new-entrant') return 'new in the top ' + meta.topN + (o.rank_a ? ' (#' + o.rank_a + ' a week ago)' : '');
+    if (f === 'many-plans') return o.max_plans + ' plans for one statement today';
+    if (f === 'untracked') return 'top ' + meta.topN + ' today, not on the candidate list';
+    return o.reasons[o.flags.indexOf(f)] || '';
+  }
+  // strongest first: per-call cost and CPU growth, then failures, then volume and newness
+  const SIG_ORDER = ['slower', 'rising', 'timeouts', 'errors', 'more-calls', 'new-entrant'];
+  function why(o, max) {
+    return o.flags.filter(f => SIG_ORDER.indexOf(f) >= 0).sort((x, y) => SIG_ORDER.indexOf(x) - SIG_ORDER.indexOf(y)).map(f => phrase(o, f)).slice(0, max || 9);
+  }
+  const alarming = o => o.worsening || o.stage === 'bubbling';
+  function groupDb(grp) { return M.dbs.find(d => d.groups.some(g => g.grp === grp)) || null; }
+  // business alarm: a "lower is better" count that jumped, or a "higher is better" count that fell by 30% or more
+  function bizAlarm(b) {
+    if (b.good === 'low') return b.total_c > Math.max(10, (TH.errorsJumpRatio || 1.3) * b.total_a);
+    return b.total_a > 0 && b.total_c < 0.7 * b.total_a;
+  }
+  function bizWhy(b) {
+    return b.label + ' ' + nf(b.total_c) + ' today, ' + (b.total_a > 0 ? nf(b.total_a) : 'none') + ' a week ago';
+  }
+  // today (week ago) and the change for one business measure; a zero is only shown when the collector sent hours for it
+  function bizNums(b) {
+    if (!b.hourly.length) return '<span class="muted" style="grid-column:span 2;text-align:right" title="The collector returned no rows for this measure in these hours">no data for these hours</span>';
+    const part = b.hourly.length < (meta.hours || 0) ? 'data for ' + b.hourly.length + ' of ' + meta.hours + ' hours' : '';
+    return '<span class="num ' + (bizAlarm(b) ? 'alarm' : '') + '"' + (part ? ' title="' + part + '"' : '') + '>' + nf(b.total_c) + ' <span class="muted" style="font-weight:400">(' + nf(b.total_a) + ')</span>' + (part ? '*' : '') + '</span>' +
+      (b.total_c || b.total_a ? dlt(b.total_c, b.total_a, b.good === 'low' ? 'low' : 'high') : '<span class="muted" title="Rows present, zero in both windows">zero both days</span>');
+  }
+
+  // ---- svg pieces
+  // Hourly comparison: today as bars from zero, week ago as a solid line, baseline as a dashed line, one scale.
+  // o.c/a/b return CPU-min for the hour; the chart shows them in the current unit. With o.meter in % mode, the CPU
+  // meter's SQL Server figure (all databases) is a short dark mark on the hours the ring buffer still holds.
+  function hourlyChart(rows, o) {
+    const W = o.w || 760, H = o.h || 230, L = 40, R = 8, T = 10, B = 22;
+    const iw = W - L - R, ih = H - T - B, n = HOURS.length || 1, bw = iw / n;
+    const U = v => v == null ? null : cpuV(v, HOUR);
+    const mtr = o.meter && isPct() ? o.meter : [];
+    const vals = HOURS.map(h => { const r = rows.find(x => x.h === h), m = mtr.find(x => x.h === h);
+      return { h, c: U(r ? o.c(r) : 0), a: U(r && o.a ? o.a(r) : (o.a ? 0 : null)), b: U(r && o.b ? o.b(r) : (o.b ? 0 : null)), x: r && o.x ? o.x(r) : null, m: m ? m.sql : null }; });
+    const max = niceMax(Math.max(...vals.map(v => Math.max(v.c, v.a || 0, v.b || 0, v.m || 0))));
+    const y = v => T + ih - ih * v / max;
+    let s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(o.label) + '">';
+    for (let i = 0; i <= 4; i++) {
+      const v = max * i / 4, yy = y(v);
+      s += '<line class="' + (i ? 'grid' : 'axis') + '" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text x="' + (L - 6) + '" y="' + (yy + 3.5) + '" text-anchor="end">' + nf(v, v < 10 && v % 1 ? 1 : 0) + (isPct() ? '%' : '') + '</text>';
+    }
+    vals.forEach((v, i) => {
+      const x = L + i * bw + bw * 0.2, w = bw * 0.6, top = y(v.c);
+      if (T + ih - top > 0.3) s += '<rect class="b-today" x="' + x.toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + (T + ih - top).toFixed(1) + '" rx="2"/>';
+      s += '<text x="' + (L + i * bw + bw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + pad2(v.h) + '</text>';
+    });
+    const line = (k, cls) => '<polyline class="' + cls + '" points="' + vals.map((v, i) => (L + i * bw + bw / 2).toFixed(1) + ',' + y(v[k]).toFixed(1)).join(' ') + '"/>';
+    if (o.b) s += line('b', 'l-base');
+    if (o.a) { s += line('a', 'l-week'); vals.forEach((v, i) => { s += '<circle class="d-week" r="3" cx="' + (L + i * bw + bw / 2).toFixed(1) + '" cy="' + y(v.a).toFixed(1) + '"/>'; }); }
+    vals.forEach((v, i) => { if (v.m != null) s += '<line class="m-meter" x1="' + (L + i * bw + bw * 0.12).toFixed(1) + '" x2="' + (L + i * bw + bw * 0.88).toFixed(1) + '" y1="' + y(v.m).toFixed(1) + '" y2="' + y(v.m).toFixed(1) + '"/>'; });
+    vals.forEach((v, i) => {
+      const tip = pad2(v.h) + ':00–' + pad2(v.h + 1) + ':00\nToday ' + fmtU(v.c) + ' ' + UL() + (v.a != null ? '\nWeek ago ' + fmtU(v.a) : '') + (v.b != null ? '\nBaseline ' + fmtU(v.b) : '') +
+        (v.m != null ? '\nCPU meter, whole SQL Server: ' + pctFmt(v.m) + (v.m > 0 ? ' (this database ' + nf(100 * v.c / v.m) + '% of it)' : '') : '') + (v.x != null ? '\n' + nf(v.x) + ' calls today' : '');
+      s += '<rect class="hit" x="' + (L + i * bw).toFixed(1) + '" y="' + T + '" width="' + bw.toFixed(1) + '" height="' + ih + '" data-tip="' + esc(tip) + '"/>';
+    });
+    return s + '</svg>';
+  }
+  // Whole days: today partial with the whole-day estimate as a dashed outline; the week-ago day solid, the baseline day hatched.
+  function dailyChart(db) {
+    const days = db.daily || [];
+    if (!days.length) return '<div class="empty">No daily history in this run.</div>';
+    const W = 420, H = 230, L = 42, R = 4, T = 10, B = 34, iw = W - L - R, ih = H - T - B, bw = iw / days.length;
+    // in % mode each day is divided by its own minutes, so today's partial bar is its average so far, comparable to whole days
+    const dayMin = d => d.day === meta.day_c ? WIN : DAY;
+    const proj = db.projection ? cpuV(db.projection.cpu_min, DAY) : 0;
+    const max = niceMax(Math.max(...days.map(d => cpuV(+d.cpu_min || 0, dayMin(d))), proj));
+    const y = v => T + ih - ih * v / max;
+    let s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + UH() + ' per whole day">' +
+      '<defs><pattern id="hatch-base" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="4" height="4" style="fill:var(--surface)"/><rect width="1.6" height="4" style="fill:var(--base)"/></pattern></defs>';
+    for (let i = 0; i <= 4; i++) { const v = max * i / 4, yy = y(v); s += '<line class="' + (i ? 'grid' : 'axis') + '" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text x="' + (L - 5) + '" y="' + (yy + 3.5) + '" text-anchor="end">' + nf(v, isPct() && v < 10 && v % 1 ? 1 : 0) + (isPct() ? '%' : '') + '</text>'; }
+    days.forEach((d, i) => {
+      const x = L + i * bw + 2, w = bw - 4, v = cpuV(+d.cpu_min || 0, dayMin(d)), isC = d.day === meta.day_c, isA = d.day === meta.day_a, isB = d.day === meta.day_b;
+      if (isC && proj > v) s += '<rect x="' + x.toFixed(1) + '" y="' + y(proj).toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + (T + ih - y(proj)).toFixed(1) + '" rx="2" style="fill:none;stroke:var(--today);stroke-dasharray:3 2;stroke-width:1.2"/>';
+      s += '<rect class="' + (isC ? 'b-today' : isA ? 'b-week' : isB ? 'b-base' : 'b-soft') + '" x="' + x.toFixed(1) + '" y="' + y(v).toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + (T + ih - y(v)).toFixed(1) + '" rx="2"/>';
+      s += '<text x="' + (x + w / 2).toFixed(1) + '" y="' + (H - B + 13) + '" text-anchor="middle">' + esc(String(d.day).slice(8, 10)) + '</text>';
+      if (isA || isB || isC) s += '<text x="' + (x + w / 2).toFixed(1) + '" y="' + (H - B + 26) + '" text-anchor="middle" style="font-weight:600;fill:var(--ink-2)">' + (isC ? 'today' : isA ? 'wk' : 'base') + '</text>';
+      const tip = dayTxt(d.day) + (isC ? ' (today, to ' + pad2(meta.hours) + ':00' + (isPct() ? ', average so far' : '') + ')' : isA ? ' (week ago)' : isB ? ' (baseline)' : '') + '\n' + fmtU(v) + ' ' + UL() +
+        (isPct() ? ' (' + cpuMin(+d.cpu_min || 0) + ' CPU-min)' : '') + (isC && proj ? '\nWhole-day estimate ≈ ' + fmtU(proj) : '');
+      s += '<rect class="hit" x="' + (L + i * bw).toFixed(1) + '" y="' + T + '" width="' + bw.toFixed(1) + '" height="' + ih + '" data-tip="' + esc(tip) + '"/>';
+    });
+    return s + '</svg>';
+  }
+  // Card sparkline: today's CPU per hour, bars from zero, scaled to this object (labelled so under the chart and in the board header).
+  function spark(o, w, h) {
+    const vals = HOURS.map(hh => { const r = o.hourly.find(x => x.h === hh); return r ? r.cpu_min : 0; });
+    const max = Math.max(...vals, 0.0001), bw = w / Math.max(1, vals.length);
+    const tip = UH() + ' per hour today, ' + winTxt() + ' (scaled to this object, top = ' + cpu(max, HOUR) + ')\n' + vals.map((v, i) => pad2(i) + 'h ' + cpu(v, HOUR)).join('  ');
+    let s = '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="hourly CPU today" data-tip="' + esc(tip) + '"><line class="axis" x1="0" x2="' + w + '" y1="' + (h - 0.5) + '" y2="' + (h - 0.5) + '"/>';
+    vals.forEach((v, i) => { const bh = Math.max(v > 0 ? 1 : 0, (h - 1) * v / max); s += '<rect class="b-today" x="' + (i * bw + 1).toFixed(1) + '" y="' + (h - 1 - bh).toFixed(1) + '" width="' + Math.max(1, bw - 2).toFixed(1) + '" height="' + bh.toFixed(1) + '" rx="1"/>'; });
+    return s + '</svg>';
+  }
+  // the bullet bars' key: today as a bar, week ago as a solid tick, baseline as a dotted tick
+  const legendTicks = () => '<span class="legend" style="display:inline-flex;margin:0"><span><i class="lg-bar"></i>today</span><span><i class="lg-tick"></i>week ago</span><span><i class="lg-tick bl"></i>baseline</span></span>';
+  const legendCmp = meter => '<div class="legend"><span><i class="lg-bar"></i>Today ' + esc(dayTxt(meta.day_c)) + '</span><span><i class="lg-line"></i>Week ago ' + esc(dayTxt(meta.day_a)) + '</span><span><i class="lg-dash"></i>Baseline ' + esc(dayTxt(meta.day_b)) + '</span>' +
+    (meter && isPct() && M.meter.length ? '<span title="SQL Server process CPU from the scheduler monitor ring buffer: every database plus background work. It keeps about 4 hours."><i class="lg-meter"></i>CPU meter, whole SQL Server</span>' : '') + '</div>';
+  // the header switch; hidden when the collector sent no CPU count
+  const unitSwitch = () => NCPU ? '<span class="seg unitsw" role="group" aria-label="Show CPU as"><button type="button" data-unit="min" aria-pressed="' + !isPct() + '" title="CPU-minutes: CPU time summed over the window (60 CPU-min = one core busy for an hour)">CPU-min</button>' +
+    '<button type="button" data-unit="pct" aria-pressed="' + isPct() + '" title="' + esc('% of the server: CPU-min ÷ (' + NCPU + ' logical CPUs × minutes in the span). Hours ÷ 60 min, days ÷ 1,440, the window ÷ ' + nf(WIN) + '.') + '">% of server</button></span>' : '';
+
+  // ---- persistent header
+  function renderHeader() {
+    const gen = String(meta.generated || '').replace('T', ' ').slice(0, 16);
+    document.title = (meta.title || 'SQL Server workload') + ' · ' + (meta.server || '') + ' · ' + (meta.day_c || '');
+    const sw = M.dbs.length > 1 ? '<span class="seg" role="group" aria-label="Database">' + M.dbs.map((d, i) => {
+      const n = d.objects.filter(o => o.stage === 'bubbling').length;
+      return '<button type="button" data-db="' + i + '" aria-pressed="' + (i === state.db) + '" title="' + esc(d.name + ': ' + n + ' bubbling up') + '">' + esc(d.name) +
+        (n ? '<span class="badge warn">' + n + ' bubbling up</span>' : '') + '</button>';
+    }).join('') + '</span>' : '';
+    document.getElementById('hdr').innerHTML =
+      '<span class="title">' + esc(meta.title) + '</span><span class="srv">' + esc(meta.server) + ' · ' + esc(meta.environment) + '</span>' + sw +
+      '<span class="asof">Data as of <b>' + esc(gen) + '</b></span>' +
+      '<div class="windows">Windows: <b>today</b> ' + esc(dayTxt(meta.day_c)) + ', ' + winTxt() + ' (last complete hour) · <b>week ago</b> ' + esc(dayTxt(meta.day_a)) +
+      ', same hours · <b>baseline</b> ' + esc(dayTxt(meta.day_b)) + ', same hours' + (meta.baselineNote ? ' (' + esc(meta.baselineNote) + ')' : '') +
+      ' · CPU in ' + (isPct() ? '% of the server (' + NCPU + ' logical CPUs)' : 'CPU-minutes') + unitSwitch() + '</div>';
+  }
+
+  const stageChip = o => '<span class="chip st-' + o.stage + '">' + esc(STAGE_LABEL[o.stage]) + '</span>';
+  // one "Look first at" line: database tag, object, the strongest two reasons, stage chip, owner when known
+  function lookItem(db, o) {
+    return '<li><span class="tag">' + esc(db.name) + '</span><a href="' + hashObj(db, o) + '" class="o">' + esc(o.obj) + '</a> – ' + esc(why(o, 2).join(', ') || 'largest item') +
+      ' ' + stageChip(o) + (o.owner ? ' <span class="muted">owner ' + esc(o.owner) + '</span>' : '') + '</li>';
+  }
+  function lookBiz(b) {
+    const gd = groupDb(b.group);
+    return '<li><span class="tag tag-biz">Business</span><b>' + esc(b.label) + '</b> – ' + nf(b.total_c) + ' today, ' + (b.total_a > 0 ? nf(b.total_a) : 'none') + ' a week ago, same hours' +
+      ' <span class="muted">(' + (b.good === 'low' ? 'lower' : 'higher') + ' is better' + (b.group ? '; ' + esc(b.group) + (gd ? ' in ' + esc(gd.name) : '') : '') + ')</span></li>';
+  }
+  // Look first at: this database's worsening items in the model's order, then business alarms, then the other databases.
+  // At most LOOK_MAX lines; each source gets up to two before any gets more, so no alarm type is pushed out by another.
+  const LOOK_MAX = 5;
+  function lookFirst(db) {
+    const srcs = [{ db, list: db.opportunities.filter(alarming) }, { list: M.business.filter(bizAlarm) }]
+      .concat(M.dbs.filter(d => d !== db).map(d => ({ db: d, list: d.opportunities.filter(alarming) })));
+    const take = srcs.map(() => 0); let left = LOOK_MAX;
+    [2, Infinity].forEach(cap => srcs.forEach((s, i) => {
+      const n = Math.min(left, Math.max(0, Math.min(s.list.length, cap) - take[i]));
+      take[i] += n; left -= n;
+    }));
+    const lines = [].concat(...srcs.map((s, i) => s.list.slice(0, take[i]).map(x => s.db ? lookItem(s.db, x) : lookBiz(x))));
+    const rest = srcs.map((s, i) => ({ s, n: s.list.length - take[i] })).filter(x => x.n > 0);
+    const more = sum(rest, x => x.n);
+    return { lines, more: more ? '… and ' + more + ' more (' + rest.map(x => x.n + ' ' + (x.s.db ? 'in ' + esc(x.s.db.name) : 'business')).join(', ') + ') – see the <button type="button" class="linkbtn" data-view="board" data-jump>Work board</button>' : '' };
+  }
+  function renderVerdict() {
+    const db = cur(), t = db.totals;
+    const alerts = M.health.filter(h => h.status === 'alert'), warns = M.health.filter(h => h.status === 'warn');
+    const biz = M.business.filter(bizAlarm);
+    const st = alerts.length ? 'alert' : (warns.length || biz.length) ? 'warn' : 'ok';
+    const named = alerts.map(h => h.area).concat(biz.map(b => b.label));
+    let head = alerts.length || biz.length ? 'Needs attention: ' + named.join(', ') + '.' : warns.length ? 'Healthy, with ' + plural(warns.length, 'check') + ' to watch.' : 'Healthy: all server checks OK.';
+    if ((alerts.length || biz.length) && warns.length) head += ' ' + plural(warns.length, 'more check') + ' to watch.';
+    const p = pctOf(t.c.cpu_min, t.a.cpu_min);
+    head += ' ' + db.name + ' is ' + (p == null ? 'new this week' : Math.abs(p) < 3 ? 'about the same as' : nf(Math.abs(p)) + '% ' + (p < 0 ? 'lighter than' : 'heavier than') + ' the same hours a week ago') + '.';
+    const pb = pctOf(t.c.cpu_min, t.b.cpu_min);
+    const both = v => isPct() ? cpu(v) + ' of the server' : nf(v) + ' CPU-min';
+    // the other unit in brackets, so the line reads the same whichever the switch shows
+    const other = !NCPU ? '' : isPct() ? ', ' + nf(t.c.cpu_min) + ' CPU-min' : ', ' + pctFmt(100 * t.c.cores / NCPU) + ' of ' + NCPU + ' CPUs';
+    const sub = both(t.c.cpu_min) + ' from 00:00 to ' + pad2(meta.hours) + ':00 (' + nf(t.c.cores, 2) + ' cores on average' + other + '), against ' +
+      (isPct() ? cpu(t.a.cpu_min) : nf(t.a.cpu_min)) + ' a week ago and ' +
+      (isPct() ? cpu(t.b.cpu_min) : nf(t.b.cpu_min)) + ' on the baseline day' + (pb == null ? '' : ' (' + (pb > 0 ? '+' : '−') + nf(Math.abs(pb)) + '%)') + '.';
+    const lf = lookFirst(db), big1 = largeUntracked(db)[0];
+    const also = big1 ? '<div class="also">Largest untracked: <a class="o" href="' + hashObj(db, big1) + '">' + esc(big1.obj) + '</a>, ' + cpu(big1.c.cpu_min) + ' ' + UL() + ' (' + nf(big1.share_pct) + '% of ' + esc(db.name) +
+      '), ' + dlt(big1.c.cpu_min, big1.a.cpu_min) + ' vs a week ago – not getting worse, listed under the board.</div>' : '';
+    document.getElementById('verdict').innerHTML = '<span class="dot ' + st + '" role="img" aria-label="status ' + st + '"></span><p class="v-head">' + esc(head) + '</p><p class="v-sub">' + sub + '</p>' +
+      '<div class="v-look"><div class="lh">Look first at</div>' + (lf.lines.length ? '<ol>' + lf.lines.join('') + '</ol>' : '<div class="muted">Nothing is getting worse today.</div>') +
+      (lf.more ? '<div class="also">' + lf.more + '</div>' : '') + also + '</div>';
+  }
+
+  // one row under the verdict: count, CPU and owners per board column; a click opens the Work board
+  function renderBoardSummary() {
+    const db = cur();
+    const cells = STAGES.map(s => {
+      const items = stageItems(db, s.k), own = {};
+      items.forEach(o => { const k = o.owner || 'unassigned'; own[k] = (own[k] || 0) + 1; });
+      const owners = Object.keys(own).sort((x, y) => (x === 'unassigned') - (y === 'unassigned') || own[y] - own[x]).map(k => k + (own[k] > 1 ? ' ×' + own[k] : '')).join(' · ');
+      return '<button type="button" class="bs-col" data-view="board" data-jump title="' + esc(s.t + ': ' + s.sub + (owners ? '. Owners: ' + owners : '') + '. Open the Work board.') + '">' +
+        '<span class="chip st-' + s.k + '">' + esc(s.t) + '</span><span class="n">' + items.length + '</span> <span class="muted">· ' + cpu(sum(items, o => o.c.cpu_min)) + ' ' + UL() + '</span>' +
+        '<span class="ow">' + (items.length ? 'Owners: ' + esc(owners) : 'nothing here') + '</span></button>';
+    }).join('');
+    document.getElementById('bsum').innerHTML = '<div class="bs-h">Work board<span class="muted">' + esc(db.name) + ', today</span></div>' + cells;
+  }
+
+  function renderKpis() {
+    const db = cur(), t = db.totals, pr = db.projection;
+    const tile = (lbl, k, fmt, unit, good, sub) => '<div class="kpi"><div class="lbl">' + lbl + '</div><div class="val">' + fmt(t.c[k]) + (unit ? '<small>' + unit + '</small>' : '') + '</div>' + (sub || '') +
+      '<div class="cmp"><span>week ago</span><span class="num">' + fmt(t.a[k]) + '</span>' + dlt(t.c[k], t.a[k], good) + '<span>baseline</span><span class="num">' + fmt(t.b[k]) + '</span>' + dlt(t.c[k], t.b[k], good) + '</div></div>';
+    const cores = '<div class="cores" title="' + esc('Average cores busy = CPU-min ÷ minutes in the window' + (NCPU ? '; % of server = cores ÷ ' + NCPU + ' logical CPUs' : '') + '. Week ago ' + nf(t.a.cores, 2) + ', baseline ' + nf(t.b.cores, 2) + ' cores') + '">= ' +
+      (isPct() ? nf(t.c.cpu_min) + ' CPU-min, ' : '') + nf(t.c.cores, 2) + ' cores busy on average' + (NCPU && !isPct() ? ' (' + pctFmt(100 * t.c.cores / NCPU) + ' of the server)' : '') + '</div>';
+    let s = tile('CPU · ' + esc(db.name), 'cpu_min', v => isPct() ? cpu(v) : nf(v), isPct() ? 'of server' : 'CPU-min', 'low', cores) + tile('Calls', 'execs', big, '', 'none') +
+      tile('CPU per call', 'cpu_ms', v => nf(v, 2), 'ms') + tile('Timeouts', 'timeouts', v => nf(v), '') + tile('Errors', 'errors', v => nf(v), '');
+    const pd = v => isPct() ? cpu(v, DAY) : nf(v);
+    if (pr) s += '<div class="kpi est"><div class="lbl">Whole day at this pace<span class="tag-est">estimate</span></div><div class="val">≈ ' + pd(pr.cpu_min) + '<small>' + UL() + '</small></div>' +
+      '<div class="cmp"><span>' + esc(dayTxt(meta.day_a)) + '</span><span class="num">' + pd(pr.day_a_cpu_min) + '</span>' + dlt(pr.cpu_min, pr.day_a_cpu_min) + '<span class="how">today ÷ week ago × last week\'s whole day' + (isPct() ? '; % of 24 hours' : '') + '</span></div></div>';
+    document.getElementById('kpis').innerHTML = s;
+  }
+
+  function renderHealth() {
+    const h = M.health, bad = h.filter(x => x.status !== 'ok'), okN = h.length - bad.length;
+    const cpuChk = h.find(x => /^CPU/.test(x.area));
+    let s = bad.length
+      ? '<span class="hl">Server checks</span>' + bad.map(x => '<span class="check ' + x.status + '"><span class="sdot ' + x.status + '" aria-label="' + x.status + '"></span>' + esc(x.area) + ' <b>' + esc(x.value) + '</b>' + (x.note ? '<span class="muted">' + esc(x.note) + '</span>' : '') + '</span>').join('') +
+        '<span class="muted">' + okN + ' other checks OK</span>'
+      : '<span class="sdot ok" aria-label="ok"></span><span class="hl">All ' + h.length + ' server checks OK</span>' + (cpuChk ? '<span class="muted">' + esc(cpuChk.area + ': ' + cpuChk.value) + '</span>' : '');
+    s += '<button type="button" class="linkbtn no-print" data-health aria-expanded="' + state.healthOpen + '">' + (state.healthOpen ? 'Hide details' : 'All checks') + '</button>';
+    if (state.healthOpen) s += '<div class="hgrid">' + h.map(x => '<div><span class="sdot ' + x.status + '"></span><span class="a">' + esc(x.area) + '</span><span>' + esc(x.value) + '</span><span class="nt">' + esc(x.note) + '</span></div>').join('') + '</div>';
+    document.getElementById('health').innerHTML = s;
+  }
+
+  // ---- tabs
+  function badges(db) {
+    const bub = db.objects.filter(o => o.stage === 'bubbling').length;
+    const watch = db.objects.filter(o => o.stage === 'watch').length;
+    const worse = db.objects.filter(o => o.worsening).length;
+    const bizN = M.business.filter(b => bizAlarm(b) && groupDb(b.group) === db).length;
+    const grpUp = db.groups.filter(g => g.c.timeouts > g.a.timeouts).length;
+    return {
+      today: bizN ? { txt: plural(bizN, 'business alarm'), cls: 'alert', t: 'Business measures of ' + db.name + ' integrations that moved the wrong way' } :
+             grpUp ? { txt: grpUp + ' with more timeouts', cls: 'warn', t: plural(grpUp, 'integration') + ' with more timeouts than a week ago' } : null,
+      board: { txt: 'Bubbling up ' + bub + (watch ? ' · watch ' + watch : ''), cls: bub + watch ? 'warn' : '', t: bub + ' bubbling up' + (watch ? ', ' + watch + ' fixed items worse again' : '') },
+      objects: { txt: worse + ' worse', cls: '', t: worse + ' objects worse than a week ago (rising, slower, more calls, timeouts or errors)' },
+      changes: { txt: db.movers_by_object.length + ' moved', cls: '', t: db.movers_by_object.length + ' objects whose statements moved by 5 CPU-min or more' }
+    };
+  }
+  function renderTabs() {
+    const b = badges(cur());
+    document.getElementById('tabs').innerHTML = VIEWS.map((v, i) => {
+      const x = b[v.k];
+      return '<button type="button" class="tab" role="tab" id="tab-' + v.k + '" aria-controls="view-' + v.k + '" aria-selected="' + (state.view === v.k) + '" tabindex="' + (state.view === v.k ? 0 : -1) + '" data-view="' + v.k + '">' +
+        esc(v.t) + (x ? '<span class="badge ' + x.cls + '" title="' + esc(x.t) + '">' + esc(x.txt) + '</span>' : '') + '</button>';
+    }).join('') + '<span class="hint">' + esc(cur().name) + ' · keys <kbd>1</kbd>–<kbd>4</kbd> switch views</span>';
+  }
+
+  // ---- Today
+  function renderToday() {
+    const db = cur();
+    // in % mode: how much of the meter's SQL Server CPU Query Store accounts for in this database, over the hours both cover
+    const mh = isPct() ? M.meter.filter(m => db.hourly.some(r => r.h === m.h)) : [];
+    const cover = mh.length ? (() => {
+      const q = sum(mh, m => cpuV(db.hourly.find(r => r.h === m.h).c.cpu_min, HOUR)), all = sum(mh, m => m.sql);
+      return ' The CPU meter covers ' + plural(mh.length, 'hour') + ' (' + pad2(mh[0].h) + ':00–' + pad2(mh[mh.length - 1].h + 1) + ':00): SQL Server averaged ' + pctFmt(all / mh.length) + ', of which ' + esc(db.name) + ' is ' + nf(all > 0 ? 100 * q / all : 0) + '%; the rest is other databases and background work.';
+    })() : '';
+    const hourly = '<div class="panel box"><h3>CPU per hour · ' + esc(db.name) + '</h3><div class="win">' + UPH() + ', ' + winTxt() + ', same hours on each day.' + cover + '</div>' + legendCmp(true) +
+      hourlyChart(db.hourly, { w: 760, h: 230, c: r => r.c.cpu_min, a: r => r.a.cpu_min, b: r => r.b.cpu_min, x: r => r.c.execs, meter: M.meter, label: UH() + ' per hour, today vs week ago vs baseline' }) + '</div>';
+    const days = db.daily || [];
+    const daily = '<div class="panel box"><h3>Whole days · ' + esc(db.name) + '</h3><div class="win">' + (isPct() ? '% of the server over each whole day; today is its average so far' : 'CPU-min per day') + (days.length ? ', ' + esc(dayTxt(days[0].day)) + ' to ' + esc(dayTxt(days[days.length - 1].day)) : '') + '</div>' +
+      '<div class="legend"><span><i class="lg-bar"></i>today, ' + (isPct() ? 'so far' : 'partial') + '</span><span><i class="lg-proj"></i>whole-day estimate</span><span><i class="lg-wk"></i>week ago</span><span><i class="lg-hatch"></i>baseline</span></div>' + dailyChart(db) + '</div>';
+    document.getElementById('view-today').innerHTML =
+      '<div class="sect-head"><h2>Today vs a week ago vs baseline</h2><span class="hint">' + esc(db.name) + ' · ' + winTxt() + ' on ' + esc(dayTxt(meta.day_c)) + ', ' + esc(dayTxt(meta.day_a)) + ' and ' + esc(dayTxt(meta.day_b)) + '</span></div>' +
+      '<div class="row2">' + hourly + daily + '</div>' +
+      '<div class="sect-head pr-keep"><h2>Integrations · ' + esc(db.name) + '</h2><span class="hint">CPU beside the business work it did, same hours · click an integration to see its objects</span></div>' +
+      '<div class="panel box pr-keep">' + integrations(db) + '</div>' +
+      '<div class="sect-head"><h2>CPU by integration and hour</h2><span class="hint">' + esc(db.name) + ', ' + winTxt() + ', ' + UH() + ' per hour</span></div>' +
+      '<div class="panel box" id="heatbox">' + heatmap(db) + '</div>';
+  }
+
+  function integrations(db) {
+    const gmax = niceMax(Math.max(0.001, ...db.groups.map(g => Math.max(g.c.cpu_min, g.a.cpu_min, g.b.cpu_min))));
+    const others = M.business.filter(b => !groupDb(b.group));
+    const te = (c, a) => (c || a) ? '<span class="' + (c > a ? 'up-txt' : '') + '">' + nf(c) + '</span> <span class="muted">(' + nf(a) + ')</span>' : '<span class="muted">–</span>';
+    const rows = db.groups.map(g => {
+      const biz = M.business.filter(b => b.group === g.grp);
+      const bizCell = biz.length ? '<div class="biz">' + biz.map(b => '<span class="l" title="' + esc(b.label + (b.good === 'low' ? ' (lower is better)' : ' (higher is better)')) + '">' + esc(b.label) + '</span>' + bizNums(b)).join('') + '</div>' : '<span class="muted">–</span>';
+      // one efficiency line per business row, so the two columns stay aligned
+      const effOut = biz.length ? biz.map(b => {
+        if (b.good === 'low' || !b.hourly.length) return '<div class="eff">&nbsp;</div>';
+        if (!(b.total_c > 0 && b.total_a > 0)) return '<div class="eff muted">–</div>';
+        const cc = g.c.cpu_min * 60000 / b.total_c, ca = g.a.cpu_min * 60000 / b.total_a;
+        return '<div class="eff" title="' + esc('CPU-seconds of the whole integration per 1,000 ' + b.label + ': today ' + nf(cc, 1) + ', week ago ' + nf(ca, 1)) + '"><b class="num">' + nf(cc, cc >= 100 ? 0 : 1) + '</b> <span class="muted">(' + nf(ca, ca >= 100 ? 0 : 1) + ')</span> ' + dlt(cc, ca) + '</div>';
+      }).join('') : '<span class="muted">–</span>';
+      return '<tr class="click" data-grp="' + esc(g.grp) + '"><td class="mid"><button type="button" class="gbtn" data-grp="' + esc(g.grp) + '" title="Open the objects of ' + esc(g.grp) + '">' + esc(g.grp) + '</button></td>' +
+        '<td class="mid hide-n"><div class="bullet" data-tip="' + esc(g.grp + '\nToday ' + cpu(g.c.cpu_min) + ' · week ago ' + cpu(g.a.cpu_min) + ' · baseline ' + cpu(g.b.cpu_min) + ' ' + UL() + '\nOne scale for all integrations: 0–' + cpu(gmax)) + '">' +
+        '<span class="b" style="width:' + (100 * g.c.cpu_min / gmax).toFixed(1) + '%"></span><span class="t" style="left:' + (100 * g.a.cpu_min / gmax).toFixed(1) + '%"></span><span class="t bl" style="left:' + (100 * g.b.cpu_min / gmax).toFixed(1) + '%"></span></div></td>' +
+        '<td class="n mid"><b>' + cpu(g.c.cpu_min) + '</b></td><td class="n mid muted">' + cpu(g.a.cpu_min) + '</td><td class="n mid muted">' + cpu(g.b.cpu_min) + '</td>' +
+        '<td class="n mid">' + dlt(g.c.cpu_min, g.a.cpu_min) + '</td><td class="n mid muted">' + nf(g.share_pct) + '%</td>' +
+        '<td class="n mid">' + te(g.c.timeouts, g.a.timeouts) + '</td><td class="n mid">' + te(g.c.errors, g.a.errors) + '</td>' +
+        '<td>' + bizCell + '</td><td class="n">' + effOut + '</td></tr>';
+    }).join('');
+    const hdr = '<thead><tr><th>Integration</th><th class="hide-n">CPU, one scale<span class="sub">' + legendTicks() + '</span></th>' +
+      '<th class="n">Today<span class="sub">' + UH() + '</span></th><th class="n">Week ago</th><th class="n">Baseline</th><th class="n">Δ week</th><th class="n" title="' + esc('Share of ' + db.name + ' CPU today, whichever unit is shown') + '">Share<span class="sub">of ' + esc(db.name) + '</span></th>' +
+      '<th class="n">Timeouts<span class="sub">today (wk ago)</span></th><th class="n">Errors<span class="sub">today (wk ago)</span></th>' +
+      '<th style="min-width:260px">Business throughput<span class="sub">today (week ago), same hours</span></th><th class="n">CPU-s per 1,000 units<span class="sub">today (week ago)</span></th></tr></thead>';
+    return '<table class="rows int-tbl">' + hdr + '<tbody>' + rows + '</tbody></table>' +
+      (others.length ? '<div class="note">Business measures not tied to an integration in ' + esc(db.name) + ': ' + others.map(b => esc(b.label) + ' ' + (b.hourly.length ? nf(b.total_c) + ' (' + nf(b.total_a) + ')' : 'no data for these hours')).join(' · ') + '</div>' : '') +
+      '<div class="note">CPU-s per 1,000 units = the whole integration\'s CPU-seconds ÷ the business count × 1,000; lower is cheaper work.</div>';
+  }
+
+  function heatmap(db) {
+    const mode = state.heat, groups = db.groups;
+    // cells in the current unit for one hour
+    const hr = g => HOURS.map(h => { const r = (g.hourly || []).find(x => x.h === h) || {}; return { h, c: cpuV(r.c || 0, HOUR), a: cpuV(r.a || 0, HOUR) }; });
+    let max = 0; const rowsH = groups.map(g => { const r = hr(g); r.forEach(x => { max = Math.max(max, mode === 'c' ? x.c : Math.abs(x.c - x.a)); }); return r; });
+    max = max || 1;
+    const head = '<tr><th class="l">Integration</th>' + HOURS.map(h => '<th>' + pad2(h) + '</th>').join('') + '<th class="n" style="text-align:right">Today</th><th class="n" style="text-align:right">Week ago</th><th class="n" style="text-align:right">Δ</th></tr>';
+    const body = groups.map((g, gi) => '<tr><th class="g" scope="row"><button type="button" class="gbtn" data-grp="' + esc(g.grp) + '" style="font-weight:500">' + esc(g.grp) + '</button></th>' + rowsH[gi].map(r => {
+      const v = mode === 'c' ? r.c : r.c - r.a, k = Math.min(1, Math.abs(v) / max), pct = Math.round(8 + 80 * Math.pow(k, 0.8)), tiny = Math.abs(v) < 0.05;
+      const col = mode === 'c' ? 'var(--today)' : v >= 0 ? 'var(--crit)' : 'var(--ok)';
+      const bg = tiny ? 'var(--sunk)' : 'color-mix(in srgb, ' + col + ' ' + pct + '%, var(--surface))';
+      // cells show bare numbers to stay narrow; the scale line below names the unit
+      const txt = tiny ? '·' : (mode === 'd' ? (v > 0 ? '+' : '−') : '') + nf(Math.abs(v), Math.abs(v) >= 10 ? 0 : 1);
+      return '<td class="cell' + (pct > 55 && !tiny ? ' hot' : '') + '" style="background:' + bg + '" data-tip="' + esc(g.grp + ', ' + pad2(r.h) + ':00–' + pad2(r.h + 1) + ':00\n' + fmtU(r.c) + ' ' + UL() + ' today, ' + fmtU(r.a) + ' a week ago') + '">' + txt + '</td>';
+    }).join('') + '<td class="tot">' + cpu(g.c.cpu_min) + '</td><td class="tot muted">' + cpu(g.a.cpu_min) + '</td><td class="tot">' + dlt(g.c.cpu_min, g.a.cpu_min) + '</td></tr>').join('');
+    const all = '<tr class="all"><th class="g" scope="row">All</th>' + HOURS.map(h => { const r = db.hourly.find(x => x.h === h); const c = cpuV(r ? r.c.cpu_min : 0, HOUR), a = cpuV(r ? r.a.cpu_min : 0, HOUR), v = mode === 'c' ? c : c - a;
+      return '<td class="cell" style="background:none" data-tip="' + esc('All, ' + pad2(h) + ':00: ' + fmtU(c) + ' today, ' + fmtU(a) + ' a week ago') + '">' + (mode === 'd' ? (v > 0 ? '+' : v < 0 ? '−' : '') : '') + nf(Math.abs(v), isPct() && Math.abs(v) < 10 ? 1 : 0) + '</td>'; }).join('') +
+      '<td class="tot">' + cpu(db.totals.c.cpu_min) + '</td><td class="tot muted">' + cpu(db.totals.a.cpu_min) + '</td><td class="tot">' + dlt(db.totals.c.cpu_min, db.totals.a.cpu_min) + '</td></tr>';
+    const scale = mode === 'c' ? '<span class="scale"><i style="background:linear-gradient(90deg, color-mix(in srgb, var(--today) 8%, var(--surface)), var(--today))"></i>0 → ' + fmtU(max) + ' ' + UL() + ' in the hour, one scale for every cell' + (isPct() ? '; totals are for the whole window' : '') + '</span>'
+      : '<span class="scale">less <i style="background:linear-gradient(90deg, var(--ok), var(--sunk), var(--crit))"></i> more ' + (isPct() ? 'of the server' : 'CPU-min') + ' than the same hour a week ago (±' + fmtU(max) + (isPct() ? ' points' : '') + ')</span>';
+    // "stronger", not "darker": in dark mode a busier cell is brighter, so the caption holds in both themes
+    const cap = mode === 'c' ? 'Stronger color = more CPU. Rows and columns share one scale.' : 'Red = more CPU than the same hour a week ago, green = less; stronger color = bigger change.';
+    return '<div class="heat-head"><span class="muted" style="font-size:12px">' + cap + '</span><span class="seg" role="group" aria-label="Heatmap values">' +
+      '<button type="button" data-heat="c" aria-pressed="' + (mode === 'c') + '">Today</button><button type="button" data-heat="d" aria-pressed="' + (mode === 'd') + '">Change vs week ago</button></span></div>' +
+      '<table class="heat"><thead>' + head + '</thead><tbody>' + body + all + '</tbody></table><div style="margin-top:6px">' + scale + '</div>';
+  }
+
+  // ---- Work board
+  const byScore = (x, y) => y.score - x.score || y.c.cpu_min - x.c.cpu_min;
+  function stageItems(db, k) { return db.objects.filter(o => o.stage === k && (o.c.cpu_min > 0 || o.a.cpu_min > 0)).sort(byScore); }
+  function boardOrder(db) { return [].concat(...STAGES.map(s => stageItems(db, s.k)), largeUntracked(db)); }
+  function largeUntracked(db) { return db.objects.filter(o => o.stage === 'untracked' && o.flags.indexOf('untracked') >= 0).sort(byScore); }
+
+  function card(db, o, maxScore) {
+    const rank = db.opportunities.indexOf(o) + 1;
+    const sig = o.flags.filter(f => f !== 'untracked').map(f => '<li><span class="chip ' + (FLAG_TONE[f] || '') + '">' + esc(FLAG_LABEL[f] || f) + '</span><span>' + esc(phrase(o, f)) + '</span></li>').join('');
+    const dl = o.a.cpu_min > 0 ? dlt(o.c.cpu_min, o.a.cpu_min) + ' <span class="muted">vs week ago (' + cpu(o.a.cpu_min) + ')</span>' : '<span class="muted">none a week ago</span>';
+    return '<a class="card' + (state.drill && state.drill.obj === o.obj ? ' sel' : '') + '" href="' + hashObj(db, o) + '" data-obj="' + esc(o.obj) + '" aria-label="' + esc(o.obj + ', ' + cpu(o.c.cpu_min) + ' ' + UL() + ' today; open the drill-down') + '">' +
+      '<div class="c-top">' + (rank ? '<span class="rank" title="Place in the model\'s opportunity list">#' + rank + '</span>' : '') + '<span class="obj" title="' + esc(o.obj) + '">' + esc(o.obj) + '</span><span class="grp" title="' + esc(o.grp) + '">' + esc(o.grp) + '</span></div>' +
+      '<div class="c-mid"><div class="c-val"><b>' + cpu(o.c.cpu_min) + '</b><span class="u">' + UL() + ' today</span><span class="dl">' + dl + '</span></div><div class="spark">' + spark(o, 76, 26) + '<span class="sc">per hour, own scale</span></div></div>' +
+      (sig ? '<ul class="sigs">' + sig + '</ul>' : '') +
+      '<div class="owner">Owner: ' + (o.owner ? '<b>' + esc(o.owner) + '</b>' : '<span class="muted">unassigned</span>') + '</div>' +
+      (o.candidate && o.candidate.status !== 'done' ? '<div class="cand-line" title="' + esc(plain(o.candidate.item)) + '">' + esc(plain(o.candidate.item)) + '</div>' : '') +
+      '<div class="score" title="Score = CPU-min today × signal weight (see the drill-down)"><span class="track"><span class="fill" style="width:' + (maxScore > 0 ? Math.max(o.score > 0 ? 2 : 0, 100 * o.score / maxScore) : 0).toFixed(1) + '%"></span></span><span class="num">score ' + nf(o.score) + '</span></div></a>';
+  }
+
+  function renderBoard() {
+    const db = cur(), LIMIT = 6;
+    const cols = STAGES.map(s => Object.assign({ items: stageItems(db, s.k) }, s));
+    const maxScore = Math.max(0, ...[].concat(...cols.map(c => c.items)).map(o => o.score));
+    const done = stageItems(db, 'done');
+    const board = cols.map(c => {
+      const key = db.name + ':' + c.k, all = state.boardMore[key], list = all ? c.items : c.items.slice(0, LIMIT);
+      return '<div class="col" data-col="' + c.k + '"><div class="col-head"><h3>' + esc(c.t) + '</h3><span class="badge ' + (c.k === 'bubbling' && c.items.length ? 'warn' : c.k === 'watch' && c.items.length ? 'alert' : '') + '">' + c.items.length + '</span>' +
+        '<span class="sum">' + cpu(sum(c.items, o => o.c.cpu_min)) + ' ' + UL() + '</span></div><div class="col-sub">' + esc(c.sub) + '</div>' +
+        '<div class="cards">' + (list.length ? list.map(o => card(db, o, maxScore)).join('') : '<div class="empty">' + (c.k === 'watch' ? 'No fixed item shows a worsening signal.' : 'Nothing here today.') + '</div>') + '</div>' +
+        (c.items.length > LIMIT ? '<button type="button" class="more" data-more="' + esc(key) + '">' + (all ? 'Show fewer' : 'Show ' + (c.items.length - LIMIT) + ' more') + '</button>' : '') +
+        (c.k === 'watch' && done.length ? '<details class="fold"><summary>' + plural(done.length, 'done item') + ' quiet today</summary><ul>' + done.map(o => '<li><a href="' + hashObj(db, o) + '" class="mono">' + esc(o.obj) + '</a> ' + cpu(o.c.cpu_min) + ' ' + UL() + ' (' + cpu(o.a.cpu_min) + ' a week ago)</li>').join('') + '</ul></details>' : '') + '</div>';
+    }).join('');
+    const lu = largeUntracked(db);
+    const quiet = '<div class="quietlist"><div class="sect-head"><h2 style="font-size:14px">Large, untracked</h2><span class="hint">In today\'s top ' + meta.topN + ', not on the candidate list, and not getting worse. Worth a look when the board is clear.</span></div>' +
+      '<div class="panel box">' + (lu.length ? '<table class="rows"><thead><tr><th>#</th><th>Object</th><th>Integration</th><th class="n">Today<span class="sub">' + UH() + '</span></th><th class="n">Week ago</th><th class="n">Δ week</th><th class="n">Share<span class="sub">of ' + esc(db.name) + '</span></th><th>Other signals</th></tr></thead><tbody>' +
+        lu.map(o => '<tr class="click" data-open="' + esc(o.obj) + '"><td class="muted">' + (db.opportunities.indexOf(o) + 1 || '') + '</td><td class="o"><a href="' + hashObj(db, o) + '">' + esc(o.obj) + '</a></td><td>' + esc(o.grp) + '</td><td class="n"><b>' + cpu(o.c.cpu_min) + '</b></td><td class="n muted">' + cpu(o.a.cpu_min) + '</td><td class="n">' + dlt(o.c.cpu_min, o.a.cpu_min) + '</td><td class="n muted">' + nf(o.share_pct, 1) + '%</td>' +
+          '<td>' + o.flags.filter(f => f !== 'untracked').map(f => '<span class="chip ' + (FLAG_TONE[f] || '') + '" title="' + esc(o.reasons[o.flags.indexOf(f)] || '') + '">' + esc(FLAG_LABEL[f] || f) + '</span>').join(' ') + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">None.</div>') + '</div></div>';
+    document.getElementById('view-board').innerHTML =
+      '<div class="sect-head"><h2>Optimization pipeline</h2><span class="hint">' + esc(db.name) + ' · ' + UH() + ' ' + winTxt() + ' today · stage and order from the model · #n = place in the opportunity list · click a card for the drill-down</span></div>' +
+      '<div class="win" style="margin-top:-4px">Small bar charts on the cards: today\'s CPU per hour, <b>each scaled to itself</b>, so compare their shapes, not their heights.</div>' +
+      '<div class="board">' + board + '</div>' + quiet;
+  }
+
+  // ---- Objects
+  const COLS = [
+    { k: 'score', h: '#', t: 'Model order: score = CPU today × signal weight', cls: 'n muted', v: (o, d) => o.score, r: (o, d) => d.opportunities.indexOf(o) + 1 || '' },
+    { k: 'obj', h: 'Object', cls: 'ob', v: o => o.obj.toLowerCase(), r: o => esc(o.obj) },
+    { k: 'grp', h: 'Integration', cls: 'gr', v: o => (o.grp || '').toLowerCase(), r: o => esc(o.grp) },
+    { k: 'c', h: 'Today', cls: 'n', v: o => o.c.cpu_min, r: o => '<b>' + cpu(o.c.cpu_min) + '</b>' },
+    { k: 'a', h: 'Wk ago', cls: 'n muted', v: o => o.a.cpu_min, r: o => cpu(o.a.cpu_min) },
+    { k: 'b', h: 'Base', cls: 'n muted', v: o => o.b.cpu_min, r: o => cpu(o.b.cpu_min) },
+    { k: 'd', h: 'Δ week', cls: 'n', v: o => o.delta_cpu_min, r: o => dlt(o.c.cpu_min, o.a.cpu_min) },
+    { k: 'ms', h: 'CPU ms/call', t: 'CPU milliseconds per call today (week ago in brackets)', cls: 'n', v: o => o.c.cpu_ms == null ? -1 : o.c.cpu_ms, r: o => '<span class="' + (o.flags.indexOf('slower') >= 0 ? 'up-txt' : '') + '">' + ms(o.c.cpu_ms) + '</span> <span class="muted">(' + ms(o.a.cpu_ms) + ')</span>' },
+    { k: 'x', h: 'Calls', cls: 'n', v: o => o.c.execs, r: o => '<span class="' + (o.flags.indexOf('more-calls') >= 0 ? 'up-txt' : '') + '" title="week ago ' + nf(o.a.execs) + '">' + big(o.c.execs) + '</span>' },
+    { k: 'te', h: 'T/O · Err', t: 'Timeouts and errors today', cls: 'n', v: o => o.c.timeouts * 1e6 + o.c.errors, r: o => (o.c.timeouts || o.c.errors) ? '<span class="' + (o.flags.indexOf('timeouts') >= 0 ? 'up-txt' : '') + '">' + nf(o.c.timeouts) + '</span> · <span class="' + (o.flags.indexOf('errors') >= 0 ? 'up-txt' : '') + '">' + nf(o.c.errors) + '</span>' : '<span class="muted">–</span>' },
+    { k: 'fl', h: 'Signals', cls: '', v: o => o.flags.length, r: o => '<span class="chips">' + o.flags.filter(f => f !== 'untracked').map(f => '<span class="chip ' + (FLAG_TONE[f] || '') + '" title="' + esc(o.reasons[o.flags.indexOf(f)] || '') + '">' + esc(FLAG_LABEL[f] || f) + '</span>').join('') + '</span>' },
+    { k: 'st', h: 'Stage', cls: '', v: o => ['bubbling', 'watch', 'ready', 'open', 'untracked', 'done'].indexOf(o.stage), r: o => o.stage === 'untracked' && o.flags.indexOf('untracked') < 0 ? '<span class="muted">–</span>' : '<span class="chip st-' + o.stage + '">' + esc(STAGE_LABEL[o.stage]) + '</span>' },
+    { k: 'ow', h: 'Owner', cls: 'gr', v: o => (o.owner || '~').toLowerCase(), r: o => o.owner ? '<span title="' + esc(o.owner) + '">' + esc(o.owner) + '</span>' : ['bubbling', 'open', 'ready', 'watch'].indexOf(o.stage) >= 0 ? '<span class="muted">unassigned</span>' : '' }
+  ];
+  function scopeRows(db) {
+    if (state.obj.scope === 'all') return db.objects.filter(o => o.c.cpu_min > 0 || o.a.cpu_min > 0);
+    return db.objects.filter(o => (o.rank_c && o.rank_c <= meta.topN) || db.opportunities.indexOf(o) >= 0 || ['bubbling', 'open', 'ready', 'watch'].indexOf(o.stage) >= 0);
+  }
+  function renderObjects() {
+    const db = cur(), f = state.obj;
+    const base = scopeRows(db).filter(o => !f.grp || o.grp === f.grp);
+    const present = FLAG_ORDER.filter(x => db.objects.some(o => o.flags.indexOf(x) >= 0));
+    const filters = '<div class="filters"><span class="seg" role="group" aria-label="Scope"><button type="button" data-scope="focus" aria-pressed="' + (f.scope === 'focus') + '">Top ' + meta.topN + ' and flagged</button><button type="button" data-scope="all" aria-pressed="' + (f.scope === 'all') + '">All objects</button></span><span class="vsep"></span>' +
+      present.map(x => { const n = base.filter(o => o.flags.indexOf(x) >= 0).length; return '<button type="button" class="fchip" data-flag="' + esc(x) + '" aria-pressed="' + !!f.flags[x] + '"' + (n || f.flags[x] ? '' : ' disabled') + '>' + esc(FLAG_LABEL[x] || x) + '<span class="n">' + n + '</span></button>'; }).join('') +
+      '<span class="vsep"></span><select id="grpSel" aria-label="Integration"><option value="">All integrations</option>' + db.groups.map(g => '<option value="' + esc(g.grp) + '"' + (f.grp === g.grp ? ' selected' : '') + '>' + esc(g.grp) + '</option>').join('') + '</select>' +
+      '<input id="q" type="search" placeholder="Search object or hash ( / )" aria-label="Search objects" value="' + esc(f.q) + '"><span class="count" id="ocount"></span></div>';
+    document.getElementById('view-objects').innerHTML =
+      '<div class="sect-head"><h2>Hour by hour' + (f.grp ? ' · ' + esc(f.grp) : '') + '</h2><span class="hint">' + esc(db.name) + ' · ' + UH() + ' per hour, shaded on one scale for every row</span></div>' +
+      '<div class="panel box" style="overflow-x:auto">' + hourGrid(db, f.grp) + '</div>' +
+      '<div class="sect-head"><h2>Objects</h2><span class="hint" id="osub"></span></div>' +
+      '<div class="panel">' + (f.grp ? groupBar(db, f.grp) : '') + filters + '<div style="overflow-x:auto"><table class="rows otbl" id="otbl"><thead></thead><tbody></tbody></table></div>' +
+      '<div class="keys" style="padding:6px 10px 8px"><kbd>↑</kbd> <kbd>↓</kbd> move · <kbd>Enter</kbd> open or close the drill-down · <kbd>/</kbd> search · <kbd>Esc</kbd> close · click a column to sort</div></div>';
+    renderTable();
+  }
+  // the link that reopens this filtered view
+  const groupLink = (db, grp) => location.href.split('#')[0] + '#' + ['view=objects', state.db ? 'db=' + encodeURIComponent(db.name) : '', 'grp=' + encodeURIComponent(grp)].filter(Boolean).join('&');
+  // One ask for the DBA or the vendor about one integration: its numbers, its business alarms and its worsening objects
+  // in the model's order, each described by the lines DashModel.drillPrompt writes for a single object.
+  function groupRequest(db, grp) {
+    const g = db.groups.find(x => x.grp === grp);
+    if (!g) return '';
+    const worse = db.opportunities.filter(o => o.grp === grp && o.worsening)
+      .concat(db.objects.filter(o => o.grp === grp && o.worsening && db.opportunities.indexOf(o) < 0).sort(byScore));
+    const list = worse.length ? worse : db.objects.filter(o => o.grp === grp && o.c.cpu_min > 0).sort((x, y) => y.c.cpu_min - x.c.cpu_min).slice(0, 3);
+    const biz = M.business.filter(b => b.group === grp);
+    const prompts = list.map(o => DashModel.drillPrompt(M, db, o).split('\n'));
+    const out = ['Use the ' + (meta.drill.skill || 'sqlserver-performance-analysis') + ' skill to review the ' + grp + ' integration in ' + db.name + ' on ' + meta.server + ' (read-only). This is one request covering the whole integration, for the DBA or the vendor.',
+      'Dashboard ' + meta.day_c + ', 00:00-' + pad2(meta.hours) + ':00: ' + grp + ' used ' + g.c.cpu_min.toFixed(1) + ' CPU-min today vs ' + g.a.cpu_min.toFixed(1) + ' on ' + meta.day_a + ' and ' + g.b.cpu_min.toFixed(1) +
+        ' on the baseline ' + meta.day_b + '; ' + plural(g.c.timeouts, 'timeout') + ' (' + nf(g.a.timeouts) + ' a week ago), ' + plural(g.c.errors, 'error') + ' (' + nf(g.a.errors) + ' a week ago).'];
+    biz.forEach(b => out.push((bizAlarm(b) ? 'Business alarm: ' : 'Business: ') + (b.hourly.length ? bizWhy(b) + ', same hours (' + (b.good === 'low' ? 'lower' : 'higher') + ' is better).' : b.label + ': no data for these hours.')));
+    out.push('', worse.length ? 'Objects getting worse than a week ago, in the dashboard\'s opportunity order:' : 'No object of this integration is getting worse than a week ago. Largest objects today:');
+    list.forEach((o, i) => { out.push((i + 1) + '. ' + (o.kind === 'adhoc' ? 'ad hoc query_hash ' + o.qhash : o.obj) + (o.owner ? ' (owner: ' + o.owner + ')' : '')); prompts[i].slice(1, -1).forEach(l => out.push('   ' + l)); });
+    if (prompts.length) out.push('', 'For each object: ' + prompts[0][prompts[0].length - 1].replace(/^./, c => c.toLowerCase()) + ' Say which fixes need the vendor' + (biz.some(bizAlarm) ? ', and whether the business alarm comes from these objects.' : '.'));
+    return out.join('\n');
+  }
+  function groupBar(db, grp) {
+    const worse = db.objects.filter(o => o.grp === grp && o.worsening).length, bizN = M.business.filter(b => b.group === grp && bizAlarm(b)).length;
+    const req = groupRequest(db, grp);
+    return '<div class="fbar"><span>Filtered to integration <b>' + esc(grp) + '</b> in ' + esc(db.name) + '</span><button type="button" class="fchip" data-grp="" title="Show every integration">✕ Clear</button>' +
+      copyBtn(groupLink(db, grp), 'Copy link') + copyBtn(req, 'Copy request for ' + grp, 'pri') +
+      '<span class="muted">' + plural(worse, 'object') + ' getting worse' + (bizN ? ', ' + plural(bizN, 'business alarm') : '') + '</span>' +
+      '<details><summary>Show the request</summary><pre class="code">' + esc(req) + '</pre></details></div>';
+  }
+  function renderTable() {
+    const db = cur(), f = state.obj, q = f.q.trim().toLowerCase();
+    const on = FLAG_ORDER.filter(x => f.flags[x]);
+    const rows = scopeRows(db).filter(o => (!f.grp || o.grp === f.grp) && (!on.length || o.flags.some(x => on.indexOf(x) >= 0)) &&
+      (!q || o.obj.toLowerCase().indexOf(q) >= 0 || (o.qhash || '').toLowerCase().indexOf(q) >= 0));
+    const col = COLS.find(c => c.k === f.sort.k) || COLS[0];
+    rows.sort((x, y) => { const a = col.v(x, db), b = col.v(y, db); return (a < b ? -1 : a > b ? 1 : 0) * f.sort.dir || y.c.cpu_min - x.c.cpu_min; });
+    f.rows = rows;
+    const t = document.getElementById('otbl'); if (!t) return;
+    t.tHead.innerHTML = '<tr>' + COLS.map(c => '<th class="sortable ' + (/\bn\b/.test(c.cls) ? 'n' : '') + '" data-sort="' + c.k + '"' + (f.sort.k === c.k ? ' aria-sort="' + (f.sort.dir > 0 ? 'ascending' : 'descending') + '"' : '') + (c.t ? ' title="' + esc(c.t) + '"' : '') + '>' + c.h +
+      (c.k === 'c' ? '<span class="sub">' + UH() + '</span>' : '') + '</th>').join('') + '</tr>';
+    t.tBodies[0].innerHTML = rows.length ? rows.map(o => '<tr tabindex="-1" data-obj="' + esc(o.obj) + '" class="' + (f.sel === o.obj ? 'sel ' : '') + (o.stage === 'done' || (o.stage === 'untracked' && !o.flags.length) ? 'quiet' : '') + '">' +
+      COLS.map(c => '<td class="' + c.cls + '"' + (c.k === 'obj' ? ' title="' + esc(o.obj) + '"' : '') + '>' + c.r(o, db) + '</td>').join('') + '</tr>').join('')
+      : '<tr><td colspan="' + COLS.length + '" class="empty">No objects match these filters.</td></tr>';
+    document.getElementById('ocount').textContent = rows.length + ' shown';
+    document.getElementById('osub').textContent = db.name + ' · ' + UH() + ' ' + winTxt() + ' · ' + (f.sort.k === 'score' ? 'model order (score), then CPU today' : 'sorted by ' + col.h) + (f.grp ? ' · integration: ' + f.grp : '');
+  }
+  // B's hour-by-hour grid; for one integration only today and a week ago exist per hour, so it says so.
+  function hourGrid(db, grp) {
+    const g = grp ? db.groups.find(x => x.grp === grp) : null;
+    const get = (h, w) => { if (g) { const r = (g.hourly || []).find(x => x.h === h); return r ? (r[w] || 0) : 0; } const r = db.hourly.find(x => x.h === h); return r ? r[w].cpu_min : 0; };
+    const wins = g ? ['c', 'a'] : ['c', 'a', 'b'];
+    const label = { c: 'Today', a: 'Week ago', b: 'Baseline' };
+    let mx = 0; wins.forEach(w => HOURS.forEach(h => { mx = Math.max(mx, get(h, w)); })); mx = mx || 1;
+    const tot = w => g ? g[w].cpu_min : db.totals[w].cpu_min;
+    const pctTxt = (c, a) => { if (!(a > 0)) return c > 0 ? 'new' : '–'; if (c / a >= 2) return DashModel.fmtRatio(c, a); const p = Math.round(100 * (c - a) / a); return (p > 0 ? "+" : p < 0 ? "−" : "") + nf(Math.abs(p)) + "%"; };
+    const tone = (c, a, minAbs) => a > 0 && Math.abs(c - a) >= minAbs && Math.abs(c - a) / a >= 0.1 ? (c > a ? 'up-txt' : 'dn-txt') : 'muted';
+    let s = '<table class="hgrid2"><thead><tr><th></th>' + HOURS.map(h => '<th class="c" title="' + pad2(h) + ':00–' + pad2(h + 1) + ':00">' + pad2(h) + '</th>').join('') + '<th class="c tot">Total</th></tr></thead><tbody>';
+    wins.forEach(w => {
+      s += '<tr class="' + (w === 'c' ? 'today' : '') + '"><td>' + label[w] + ' <span class="fnt">' + esc(dayTxt(meta['day_' + w])) + '</span></td>' + HOURS.map(h => { const v = get(h, w);
+        return '<td class="c" style="background:color-mix(in srgb, var(--today) ' + Math.round(4 + 46 * v / mx) + '%, var(--surface))">' + cpu(v, HOUR) + '</td>'; }).join('') + '<td class="c tot">' + cpu(tot(w)) + '</td></tr>';
+    });
+    ['a', 'b'].filter(w => wins.indexOf(w) >= 0).forEach((w, i) => {
+      s += '<tr class="' + (i ? '' : 'sep') + '"><td>Δ vs ' + (w === 'a' ? 'week ago' : 'baseline') + '</td>' + HOURS.map(h => '<td class="c ' + tone(get(h, 'c'), get(h, w), 2) + '">' + pctTxt(get(h, 'c'), get(h, w)) + '</td>').join('') +
+        '<td class="c tot ' + tone(tot('c'), tot(w), 1) + '">' + pctTxt(tot('c'), tot(w)) + '</td></tr>';
+    });
+    if (!g) ['timeouts', 'errors'].forEach((k, i) => {
+      s += '<tr class="' + (i ? '' : 'sep') + '"><td>' + (k === 'timeouts' ? 'Timeouts' : 'Errors') + ' <span class="fnt">today (wk ago)</span></td>' + HOURS.map(h => { const r = db.hourly.find(x => x.h === h); const c = r ? r.c[k] : 0, a = r ? r.a[k] : 0;
+        return '<td class="c"><span class="' + (c > a && c > 0 ? 'up-txt' : '') + '">' + nf(c) + '</span> <span class="fnt">(' + nf(a) + ')</span></td>'; }).join('') +
+        '<td class="c tot">' + nf(db.totals.c[k]) + ' <span class="fnt">(' + nf(db.totals.a[k]) + ')</span></td></tr>';
+    });
+    return s + '</tbody></table>' + (g ? '<div class="note">Per integration the collector keeps today and a week ago by hour; baseline, timeouts and errors by hour exist only for the whole database. Clear the integration filter to see them.</div>' : '');
+  }
+
+  // ---- Changes
+  function objLink(db, name) {
+    const o = db.objects.find(x => x.obj === name);
+    return o ? '<a href="' + hashObj(db, o) + '" class="o" title="' + esc(name) + '">' + esc(name) + '</a>' : '<span class="o">' + esc(name) + '</span>';
+  }
+  // statement movers, net per object, on one scale (Changes view and the printed pages)
+  function moversTable(db) {
+    const mbo = db.movers_by_object || [];
+    const mx = Math.max(1, ...mbo.map(m => Math.max(Math.abs(m.delta), m.up, -m.down)));
+    return mbo.length ? '<table class="rows"><thead><tr><th>Object</th><th class="n">Net change<span class="sub">' + UH() + '</span></th><th style="width:28%">less ← → more<span class="sub">one scale</span></th><th>Statements</th></tr></thead><tbody>' + mbo.map(m => {
+      const st = db.movers.filter(x => x.obj === m.obj);
+      const w = 50 * Math.abs(m.delta) / mx, left = m.delta >= 0 ? 50 : 50 - w;
+      const detail = m.replaced
+        ? '<span class="chip rw" title="Old statements disappeared and new ones appeared (vendor upgrade or fix). The net is what changed.">rewritten</span> <span class="stl">new +' + cpu(m.up) + ', old ' + cpu(m.down) + '</span>'
+        : st.map(x => '<span class="kind ' + x.kind + '">' + x.kind + '</span> <span class="stl">query_id ' + esc(x.query_id) + ' · ' + cpu(x.cpu_a) + ' → ' + cpu(x.cpu_c) + ' · ' + plural(+x.plans_c || 0, 'plan') + '</span>').join('<br>');
+      return '<tr><td>' + objLink(db, m.obj) + '</td><td class="n"><b class="' + (m.delta > 0 ? 'up-txt' : 'dn-txt') + '">' + (m.delta > 0 ? '+' : '−') + cpu(Math.abs(m.delta)) + '</b></td>' +
+        '<td><div class="div-bar" data-tip="' + esc(m.obj + '\nnet ' + (m.delta > 0 ? '+' : '') + cpu(m.delta) + ' ' + UL() + ' vs a week ago' + (m.replaced ? '\nrewritten: new statements +' + cpu(m.up) + ', old ' + cpu(m.down) : '')) + '"><span class="mid"></span><span class="b ' + (m.delta >= 0 ? 'up' : 'dn') + '" style="left:' + left.toFixed(1) + '%;width:' + w.toFixed(1) + '%"></span></div></td>' +
+        '<td>' + detail + '</td></tr>';
+    }).join('') + '</tbody></table>' : '<div class="empty">No statement moved by 5 CPU-min or more.</div>';
+  }
+  function renderChanges() {
+    const db = cur(), movers = moversTable(db);
+    const w = db.waits || {}, cats = (w.categories || []).slice().sort((x, y) => (y.min_c || 0) - (x.min_c || 0)).slice(0, 8);
+    const wmax = Math.max(1, ...cats.map(c => Math.max(c.min_c || 0, c.min_a || 0, c.min_b || 0)));
+    const waits = cats.length ? '<table class="rows"><thead><tr><th>Category</th><th style="width:40%">One scale<span class="sub">' + legendTicks() + '</span></th><th class="n">Today</th><th class="n">Wk ago</th><th class="n">Base</th></tr></thead><tbody>' +
+      cats.map(c => '<tr><td>' + esc(c.category) + '</td><td><div class="bullet" data-tip="' + esc(c.category + '\nToday ' + nf(c.min_c) + ' · week ago ' + nf(c.min_a) + ' · baseline ' + nf(c.min_b) + ' wait-min') + '"><span class="b" style="width:' + (100 * (c.min_c || 0) / wmax).toFixed(1) + '%"></span><span class="t" style="left:' + (100 * (c.min_a || 0) / wmax).toFixed(1) + '%"></span><span class="t bl" style="left:' + (100 * (c.min_b || 0) / wmax).toFixed(1) + '%"></span></div></td>' +
+        '<td class="n">' + nf(c.min_c) + '</td><td class="n muted">' + nf(c.min_a) + '</td><td class="n muted">' + nf(c.min_b) + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">No wait data in this run.</div>';
+    const par = (w.parallel_objects || []).slice(0, 10);
+    const parT = par.length ? '<table class="rows"><thead><tr><th>Object</th><th class="n">Today<span class="sub">wait-min</span></th><th class="n">Week ago</th><th class="n">Δ</th></tr></thead><tbody>' +
+      par.map(p => '<tr><td>' + objLink(db, p.obj) + '</td><td class="n">' + nf(p.min_c) + '</td><td class="n muted">' + (p.min_a == null ? '–' : nf(p.min_a)) + '</td><td class="n">' + dlt(p.min_c || 0, p.min_a || 0) + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">None.</div>';
+    const rankSt = { ready: 0, open: 1, done: 2 };
+    const cands = M.candidates.slice().sort((x, y) => (rankSt[x.status] - rankSt[y.status]) || ((y.seen ? y.seen.cpu_c : -1) - (x.seen ? x.seen.cpu_c : -1)));
+    const candT = '<table class="rows cand-tbl"><thead><tr><th>Status</th><th>Item</th><th>Seen today</th><th class="n">CPU today<span class="sub">' + UH() + '</span></th><th>Owner</th></tr></thead><tbody>' + cands.map(c => {
+      const ow = (c.fields || []).find(x => /^owner$/i.test(x.name)), sd = c.seen ? M.dbs.find(d => d.name === c.seen.db) : null;
+      return '<tr><td><span class="chip st-' + esc(c.status) + '">' + esc(c.status === 'ready' ? 'ready to deploy' : c.status) + '</span></td><td class="it"><span title="' + esc(plain(c.item)) + '">' + esc(plain(c.item)) + '</span></td>' +
+        '<td>' + (c.seen && sd ? objLink(sd, c.seen.obj) + (sd !== db ? ' <span class="muted">in ' + esc(sd.name) + '</span>' : '') : '<span class="muted">not matched today</span>') + '</td>' +
+        '<td class="n">' + (c.seen ? cpu(c.seen.cpu_c) : '–') + '</td><td>' + esc(ow && ow.value !== '—' ? plain(ow.value) : '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    document.getElementById('view-changes').innerHTML =
+      '<div class="sect-head"><h2>What changed since last week</h2><span class="hint">' + esc(db.name) + ' · ' + winTxt() + ', ' + esc(dayTxt(meta.day_c)) + ' vs ' + esc(dayTxt(meta.day_a)) + '</span></div>' +
+      '<div class="row-ch"><div class="panel box"><h3>Statement movers, net per object</h3><div class="win">Statements whose CPU moved by 5 CPU-min or more, added up per object. "Rewritten" = old statements replaced by new ones, so only the net counts.</div>' + movers + '</div>' +
+      '<div style="display:grid;gap:12px;align-content:start"><div class="panel box"><h3>Waits</h3><div class="win">wait-min by category, ' + winTxt() + '</div>' + waits + '</div>' +
+      '<div class="panel box"><h3>Parallelism waits by object</h3><div class="win">wait-min, today vs a week ago</div>' + parT + '</div></div></div>' +
+      '<div class="sect-head"><h2>Candidate list</h2><span class="hint">' + plural(M.candidates.length, 'item') + ' the DBA already knows about: ' + ['ready', 'open', 'done'].map(s => M.candidates.filter(c => c.status === s).length + ' ' + s).join(', ') + '</span></div>' +
+      '<div class="panel box">' + candT + '</div>';
+  }
+
+  // ---- drill-down
+  function candidateRow(db, o) {
+    const p = s => String(s).replace(/\|/g, '\\|');
+    const item = o.kind === 'adhoc' ? 'Ad hoc `' + o.qhash + '` (' + o.grp + (M.dbs.length > 1 ? ', ' + db.name : '') + ')' : '`' + o.obj + '` (' + o.grp + (M.dbs.length > 1 ? ', ' + db.name : '') + ')';
+    const ev = meta.day_c + ' 00–' + pad2(meta.hours) + 'h: ' + cpuMin(o.c.cpu_min) + ' CPU-min (' + cpuMin(o.a.cpu_min) + ' on ' + meta.day_a + ', ' + cpuMin(o.b.cpu_min) + ' on ' + meta.day_b + ' baseline); ' +
+      nf(o.c.execs) + ' calls, ' + ms(o.c.cpu_ms) + ' ms CPU and ' + nf(o.c.reads_per) + ' reads each' + (o.reasons.length ? '. Signals: ' + o.reasons.join('; ') : '');
+    return '| ' + p(item) + ' | ' + p(ev) + ' | Investigate | — |';
+  }
+  // Prev/Next order: the objects table as sorted when it is open; otherwise the model's opportunity list,
+  // followed by the rest of the work board and the large, untracked list.
+  function navList(db) {
+    if (state.view === 'objects' && state.obj.rows.length) return state.obj.rows;
+    const opp = db.opportunities;
+    return opp.concat(boardOrder(db).filter(o => opp.indexOf(o) < 0));
+  }
+  function navPos(db, list, i) {
+    const n = db.opportunities.length;
+    if (i < 0) return { txt: 'not in the list', t: 'Not on the board or in the opportunity list; Prev/Next are off' };
+    if (state.view === 'objects' && list === state.obj.rows) return { txt: 'row ' + (i + 1) + ' of ' + list.length + ' in the table', t: 'Order of the objects table as it is sorted and filtered now' };
+    return i < n ? { txt: 'opportunity ' + (i + 1) + ' of ' + list.length, t: 'Prev/Next follow the model\'s opportunity order (score); after the ' + n + ' opportunities come the other board and untracked items' }
+                 : { txt: 'item ' + (i + 1) + ' of ' + list.length + ', after the ' + n + ' opportunities', t: 'The model ranks ' + n + ' opportunities; the rest of the board and the untracked list follow in board order' };
+  }
+  function scoreWorked(o) {
+    const parts = o.flags.filter(f => WEIGHT[f] !== undefined);
+    let w = 1 + sum(parts, f => WEIGHT[f]);
+    const zero = o.candidate && o.candidate.status === 'done' && o.flags.indexOf('rising') < 0 && o.flags.indexOf('slower') < 0;
+    if (zero) w = 0;
+    const matches = Math.abs(o.c.cpu_min * w - o.score) < 0.01;
+    if (!matches) return 'Score <b>' + nf(o.score, 1) + '</b> = ' + cpuMin(o.c.cpu_min) + ' CPU-min today × ' + nf(o.c.cpu_min > 0 ? o.score / o.c.cpu_min : 0, 2) + ' signal weight.';
+    if (zero) return 'Score <b>0</b>: on the candidate list as done, and neither rising nor slower, so it does not count.';
+    return 'Score <b>' + nf(o.score, 1) + '</b> = ' + cpuMin(o.c.cpu_min) + ' CPU-min today × <b>' + nf(w, 2) + '</b> (1' + parts.map(f => ' + ' + esc(FLAG_LABEL[f] || f) + ' ' + WEIGHT[f]).join('') + ').' +
+      ' Big CPU counts; rising and slower count double the other signals.';
+  }
+  function renderDrill(db, o) {
+    const rank = db.opportunities.indexOf(o) + 1, cand = o.candidate, list = navList(db), i = list.indexOf(o);
+    const prev = i > 0 ? list[i - 1] : null, next = i >= 0 && i < list.length - 1 ? list[i + 1] : null, pos = navPos(db, list, i);
+    const navA = (t, txt, lbl) => t ? '<a class="btn" href="' + hashObj(db, t) + '" title="' + esc(lbl + ': ' + t.obj) + '" data-nav>' + txt + '</a>' : '<button type="button" class="btn" disabled>' + txt + '</button>';
+    const tags = '<span class="chip st-' + o.stage + '">' + esc(STAGE_LABEL[o.stage] === 'large, untracked' && o.flags.indexOf('untracked') < 0 ? 'not flagged' : STAGE_LABEL[o.stage]) + '</span>' +
+      (rank ? '<span class="chip">#' + rank + ' opportunity</span>' : '') + '<span class="chip">rank by CPU: #' + (o.rank_c || '–') + ' today, #' + (o.rank_a || '–') + ' a week ago</span>' +
+      '<span class="chip">' + nf(o.share_pct, 1) + '% of ' + esc(db.name) + ' CPU</span>' +
+      (o.owner || o.candidate || o.stage === 'bubbling' ? '<span class="chip" style="background:none;border:1px solid var(--line)">Owner: ' + esc(o.owner || 'unassigned') + '</span>' : '');
+    const rows = [['CPU (' + UH() + ')', 'cpu_min', v => cpu(v)], ['Calls', 'execs', v => nf(v)], ['CPU per call (ms)', 'cpu_ms', ms], ['Duration per call (ms)', 'dur_ms', ms], ['Reads per call', 'reads_per', v => nf(v)], ['Timeouts', 'timeouts', v => nf(v)], ['Errors', 'errors', v => nf(v)]];
+    const nums = '<div class="panel box"><h3>Today vs a week ago vs baseline</h3><div class="win">' + winTxt() + ' on each day</div><table class="kv"><thead><tr><th></th><th>Today<small>' + esc(dayTxt(meta.day_c)) + '</small></th><th>Week ago<small>' + esc(dayTxt(meta.day_a)) + '</small></th><th>Δ</th><th>Baseline<small>' + esc(dayTxt(meta.day_b)) + '</small></th><th>Δ</th></tr></thead><tbody>' +
+      rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[2](o.c[r[1]]) + '</td><td>' + r[2](o.a[r[1]]) + '</td><td>' + dlt(o.c[r[1]], o.a[r[1]], r[1] === 'execs' ? 'none' : 'low') + '</td><td>' + r[2](o.b[r[1]]) + '</td><td>' + dlt(o.c[r[1]], o.b[r[1]], r[1] === 'execs' ? 'none' : 'low') + '</td></tr>').join('') + '</tbody></table></div>';
+    const sigs = '<div class="panel box"><h3>Why it is here</h3><div class="win">Signals and the score, from the model</div>' +
+      (o.flags.length ? '<ul class="sigs">' + o.flags.map(f => '<li><span class="chip ' + (FLAG_TONE[f] || '') + '">' + esc(FLAG_LABEL[f] || f) + '</span><span>' + esc(o.reasons[o.flags.indexOf(f)] || '') + '</span></li>').join('') + '</ul>' : '<div class="empty">No signal today.</div>') +
+      '<div class="worked">' + scoreWorked(o) + '</div></div>';
+    const shape = '<div class="panel box"><h3>Hourly shape today</h3><div class="win">' + UH() + ' per hour, ' + winTxt() + ' (hover for calls). Week ago and baseline exist only as totals for one object, so they are in the table above, not spread over the hours.</div>' +
+      hourlyChart(o.hourly.map(r => ({ h: r.h, v: r.cpu_min, x: r.execs })), { w: 660, h: 170, c: r => r.v || 0, x: r => r.x || 0, label: UH() + ' per hour today for ' + o.obj }) + '</div>';
+    const st = o.stmts.length ? o.stmts.map((s, si) => '<div class="stmt"><div class="sh"><span class="mono"><b>query_id ' + esc(s.query_id) + '</b></span><span class="mono muted">' + esc(s.query_hash || '') + '</span>' +
+      '<span><b>' + cpu(+s.cpu_c || 0) + '</b> ' + UL() + ' (' + cpu(+s.cpu_a || 0) + ' wk ago)</span><span>' + ms(s.cpu_ms_c) + ' ms each (' + ms(s.cpu_ms_a) + ')</span><span>' + nf(s.execs_c) + ' calls (' + nf(s.execs_a) + ')</span>' +
+      '<span>plans <b>' + ((+s.plans_c || 0) >= 3 ? '<span class="chip watch">' + nf(s.plans_c) + '</span>' : nf(s.plans_c)) + '</b> today, ' + nf(s.plans_a) + ' wk ago</span>' + (s.reads_per_c != null ? '<span>' + nf(s.reads_per_c) + ' reads each</span>' : '') + '</div>' +
+      '<details' + (si === 0 ? ' open' : '') + '><summary>' + esc(String(s.sql_text || '').replace(/\s+/g, ' ').trim().slice(0, 150)) + '</summary><pre class="code">' + esc(String(s.sql_text || '').trim()) + '</pre></details></div>').join('')
+      : '<div class="empty">No statement detail for this object.</div>';
+    const stmts = '<div class="panel box"><h3>Statements</h3><div class="win">Top statements by CPU today; today (week ago). Click a statement for its text.</div>' + st + '</div>';
+    const prompt = DashModel.drillPrompt(M, db, o), params = DashModel.scriptParams(o), row = candidateRow(db, o);
+    const ask = '<div class="panel box"><div class="box-head"><h3>Request for Claude</h3>' + copyBtn(prompt, 'Copy request', 'pri') + '</div><div class="win">Paste in Claude Code to start the read-only analysis</div><pre class="code">' + esc(prompt) + '</pre></div>';
+    const scripts = '<div class="panel box"><h3>Script parameters</h3><div class="win">EDIT ME values for the ' + esc(meta.drill.skill || 'analysis') + ' scripts' + (meta.drill.scripts ? ' in <span class="mono">' + esc(meta.drill.scripts) + '</span>' : '') + '</div>' +
+      (params.length ? params.map(p => '<div class="param"><span class="s mono">' + esc(p.script) + '</span><code>' + esc(p.edit) + '</code>' + copyBtn(p.edit, 'Copy') + '</div>').join('') : '<div class="empty">No parameters for this object.</div>') + '</div>';
+    const fields = cand ? '<dl class="fields"><dt>Status</dt><dd><span class="chip st-' + cand.status + '">' + esc(cand.status === 'ready' ? 'ready to deploy' : cand.status) + '</span></dd>' + (o.owner ? '<dt>Owner</dt><dd><b>' + esc(o.owner) + '</b></dd>' : '') + '<dt>Item</dt><dd>' + esc(plain(cand.item)) + '</dd>' +
+      (cand.fields || []).filter(f => !/^owner$/i.test(f.name)).map(f => '<dt>' + esc(f.name) + '</dt><dd>' + esc(plain(f.value)) + '</dd>').join('') + '</dl>' : '<div class="empty" style="padding:4px 0">Not on the candidate list. This row is ready for the Open table:</div>';
+    const candBox = '<div class="panel box"><div class="box-head"><h3>Candidate list</h3>' + copyBtn(row, 'Copy as a candidate row') + '</div>' + fields + '<pre class="code" style="max-height:120px">' + esc(row) + '</pre></div>';
+    const el = document.getElementById('drill');
+    el.innerHTML = '<div class="dr-head"><div class="dr-bar"><span class="kick">Drill-down · ' + esc(db.name) + ' · ' + esc(o.grp) + ' · ' + esc(o.kind) + '</span>' +
+      '<button type="button" class="btn" data-close aria-label="Close the drill-down (Esc)">Close ✕</button></div>' +
+      '<h2 id="dr-title" tabindex="-1">' + esc(o.obj) + '</h2><div class="tags">' + tags + '</div>' +
+      '<div class="dr-bar dr-acts">' + navA(prev, '← Prev', 'Previous') + navA(next, 'Next →', 'Next') +
+      '<span class="pos" title="' + esc(pos.t) + '">' + esc(pos.txt) + '</span>' +
+      copyBtn(location.href.split('#')[0] + hashObj(db, o), 'Copy link') + copyBtn(prompt, 'Copy request') + copyBtn(row, 'Copy as a candidate row') + '</div></div>' +
+      '<div class="dr-body">' + sigs + nums + shape + stmts + ask + scripts + candBox + '</div>';
+  }
+
+  // ---- routing: #view=<view>&db=<database>&grp=<integration>&unit=pct&drill=<database>|<object>
+  function readHash(src) {
+    const out = { view: 'today', db: null, grp: '', drill: null, unit: null };
+    (src == null ? location.hash : src).replace(/^#/, '').split('&').forEach(p => {
+      const i = p.indexOf('='); if (i < 0) return;
+      const k = p.slice(0, i), v = p.slice(i + 1);
+      const dec = s => { try { return decodeURIComponent(s); } catch (e) { return s; } };
+      if (k === 'view' && VIEWS.some(x => x.k === v)) out.view = v;
+      else if (k === 'db') out.db = dec(v);
+      else if (k === 'grp') out.grp = dec(v);
+      else if (k === 'unit') out.unit = v === 'pct' ? 'pct' : 'min';
+      else if (k === 'drill') {
+        const m = v.match(/\||%7C/i); if (!m) return;
+        out.drill = { db: dec(v.slice(0, m.index)), obj: dec(v.slice(m.index + m[0].length)) };
+      }
+    });
+    return out;
+  }
+  function hashText() {
+    const p = [];
+    if (state.view !== 'today') p.push('view=' + state.view);
+    if (state.db !== 0 && !state.drill) p.push('db=' + encodeURIComponent(cur().name));
+    if (state.view === 'objects' && state.obj.grp) p.push('grp=' + encodeURIComponent(state.obj.grp));
+    if (isPct()) p.push('unit=pct');
+    if (state.drill) p.push('drill=' + encodeURIComponent(state.drill.db) + '|' + encodeURIComponent(state.drill.obj));
+    return p.join('&');
+  }
+  function writeHash(push) {
+    const h = hashText(), url = location.pathname + location.search + (h ? '#' + h : '');
+    if (('#' + h) === location.hash || (!h && !location.hash)) return;
+    try { history[push ? 'pushState' : 'replaceState'](null, '', url); } catch (e) { location.hash = h; }
+  }
+  // CPU-min or % of server: every view and an open drill-down redraw; the choice is kept for this viewer
+  function setUnit(u) {
+    u = u === 'pct' ? 'pct' : 'min';
+    if (u === state.unit) return;
+    state.unit = u;
+    try { localStorage.setItem('dash.unit', u); } catch (e) { /* private window: the link still carries it */ }
+    renderAll();
+    if (state.drill) renderDrill(M.dbs[state.db], M.dbs[state.db].objects.find(x => x.obj === state.drill.obj));
+  }
+  function setDb(i) {
+    if (i === state.db) return;
+    state.db = i; setGrp(''); state.obj.flags = {}; state.obj.sel = null;
+    renderAll();
+  }
+  // An integration filter shows all of that integration's objects by CPU today, done ones included, so nothing
+  // drops to the bottom just because its score is zero; clearing it goes back to the model's order.
+  function setGrp(grp) {
+    state.obj.grp = grp;
+    state.obj.scope = grp ? 'all' : 'focus';
+    state.obj.sort = grp ? { k: 'c', dir: -1 } : { k: 'score', dir: -1 };
+  }
+  function showView(v, focusTab) {
+    state.view = v;
+    VIEWS.forEach(x => { document.getElementById('view-' + x.k).hidden = x.k !== v; });
+    renderTabs();
+    if (focusTab) { const t = document.getElementById('tab-' + v); if (t) t.focus(); }
+  }
+  function openDrill(dbName, objName) {
+    const di = M.dbs.findIndex(d => d.name === dbName);
+    const o = di >= 0 ? M.dbs[di].objects.find(x => x.obj === objName) : null;
+    if (!o) { closeDrill(); return false; }
+    if (di !== state.db) setDb(di);
+    const was = state.drill;
+    state.drill = { db: M.dbs[di].name, obj: o.obj };
+    state.obj.sel = o.obj;
+    renderDrill(M.dbs[di], o);
+    const el = document.getElementById('drill');
+    el.hidden = false; el.scrollTop = 0; document.body.classList.add('drilling');
+    markSel();
+    if (!was) { const t = document.getElementById('dr-title'); if (t) t.focus({ preventScroll: true }); }
+    return true;
+  }
+  function closeDrill() {
+    const was = state.drill;
+    state.drill = null;
+    document.getElementById('drill').hidden = true; document.body.classList.remove('drilling');
+    markSel();
+    if (was) { const back = document.querySelector('[data-obj="' + (window.CSS && CSS.escape ? CSS.escape(was.obj) : was.obj) + '"]'); if (back && back.offsetParent) back.focus({ preventScroll: true }); }
+  }
+  function markSel() {
+    const sel = state.drill ? state.drill.obj : null;
+    document.querySelectorAll('.card').forEach(c => c.classList.toggle('sel', c.dataset.obj === sel));
+    document.querySelectorAll('#otbl tbody tr[data-obj]').forEach(r => r.classList.toggle('sel', r.dataset.obj === state.obj.sel));
+  }
+  // apply the hash to the page (load, back/forward, typed links)
+  function route() {
+    const h = readHash();
+    if (h.unit) setUnit(h.unit);
+    if (h.drill) { const di = M.dbs.findIndex(d => d.name === h.drill.db); if (di >= 0) setDb(di); }
+    else if (h.db) { const di = M.dbs.findIndex(d => d.name === h.db); if (di >= 0) setDb(di); }
+    if (h.view === 'objects' && h.grp !== state.obj.grp) { setGrp(h.grp); renderObjects(); }
+    showView(h.view);
+    if (h.drill) { if (!openDrill(h.drill.db, h.drill.obj)) writeHash(false); } else if (state.drill) closeDrill();
+  }
+  function go(changes, push) {
+    if (changes.db != null) setDb(changes.db);
+    if (changes.grp != null) { setGrp(changes.grp); renderObjects(); }
+    if (changes.view) showView(changes.view, changes.focusTab);
+    if (changes.drill === null) closeDrill();
+    writeHash(push !== false);
+  }
+
+  // printed pages after the stand-up sheet: top objects (the model's opportunities) and statement movers, per database
+  function renderPrintExtra() {
+    const row = (d, o, i) => '<tr><td class="n muted">' + (i + 1) + '</td><td class="o">' + esc(o.obj) + '</td><td>' + esc(o.grp) + '</td><td>' + stageChip(o) + '</td><td>' + esc(o.owner || (o.stage === 'untracked' ? '' : 'unassigned')) + '</td>' +
+      '<td class="n"><b>' + cpu(o.c.cpu_min) + '</b></td><td class="n muted">' + cpu(o.a.cpu_min) + '</td><td class="n">' + dlt(o.c.cpu_min, o.a.cpu_min) + '</td><td>' + esc(why(o, 2).join(', ')) + '</td></tr>';
+    document.getElementById('print-extra').innerHTML = M.dbs.map(d =>
+      '<div class="pg"><div class="sect-head"><h2>Top objects · ' + esc(d.name) + '</h2><span class="hint">the model\'s opportunity list, ' + winTxt() + ' today vs the same hours a week ago, ' + UH() + '</span></div>' +
+      '<div class="panel box"><table class="rows"><thead><tr><th class="n">#</th><th>Object</th><th>Integration</th><th>Stage</th><th>Owner</th><th class="n">Today</th><th class="n">Week ago</th><th class="n">Δ week</th><th>Worse because</th></tr></thead><tbody>' +
+      d.opportunities.map((o, i) => row(d, o, i)).join('') + '</tbody></table></div>' +
+      '<div class="sect-head"><h2>Statement movers · ' + esc(d.name) + '</h2><span class="hint">net per object, statements that moved by 5 CPU-min or more</span></div><div class="panel box">' + moversTable(d) + '</div></div>').join('');
+  }
+
+  function renderAll() {
+    renderHeader(); renderVerdict(); renderBoardSummary(); renderKpis(); renderHealth(); renderTabs();
+    renderToday(); renderBoard(); renderObjects(); renderChanges(); renderPrintExtra();
+    document.getElementById('foot').textContent = 'Windows: today ' + meta.day_c + ' ' + winTxt() + ' (last complete hour); week ago ' + meta.day_a + ' and baseline ' + meta.day_b + ' over the same hours. ' +
+      'CPU from Query Store in CPU-minutes; cores = CPU-min ÷ minutes in the window' + (NCPU ? '; % of server = cores ÷ ' + NCPU + ' logical CPUs (scores, copied requests and candidate rows always use CPU-min)' : '') + '. Data as of ' + String(meta.generated || '').replace('T', ' ') + '; ' +
+      M.dbs.map(d => d.name + ' sampled ' + String(d.meta.now_local || '').replace('T', ' ').slice(0, 16)).join(', ') + '. Read-only collection. Printing gives a one-page stand-up sheet, then optional pages with top objects and statement movers per database.';
+    markSel();
+  }
+
+  // ---- copy: hidden textarea and the copy command only (works on file:// pages and in mailed copies)
+  function doCopy(text, btn) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+    const label = btn.dataset.label;
+    btn.textContent = ok ? 'Copied ✓' : 'Copy blocked: select the text';
+    setTimeout(() => { btn.textContent = label; }, 1600);
+  }
+
+  // ---- events
+  // a drill-down link opens the panel over the current view (the href is still the shareable deep link)
+  function drillTo(dbName, objName, push) { if (openDrill(dbName, objName)) writeHash(push); }
+  document.addEventListener('click', e => {
+    const a = e.target.closest('a[href^="#drill="]');
+    if (a && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
+      const h = readHash(a.getAttribute('href'));
+      if (h.drill) { e.preventDefault(); drillTo(h.drill.db, h.drill.obj, !a.hasAttribute('data-nav')); return; }
+    }
+    const t = e.target.closest('[data-copy],[data-more],[data-db],[data-close],[data-view],[data-grp],[data-unit],[data-heat],[data-health],[data-scope],[data-flag],th[data-sort],#otbl tbody tr[data-obj],tr[data-open]');
+    if (!t) return;
+    if (t.hasAttribute('data-copy')) return doCopy(copyTexts[+t.dataset.copy], t);
+    if (t.hasAttribute('data-more')) { state.boardMore[t.dataset.more] = !state.boardMore[t.dataset.more]; renderBoard(); markSel(); return; }
+    if (t.hasAttribute('data-db')) { go({ db: +t.dataset.db, drill: null }); return; }
+    if (t.hasAttribute('data-close')) { go({ drill: null }); return; }
+    if (t.hasAttribute('data-view')) {
+      go({ view: t.dataset.view });
+      if (t.hasAttribute('data-jump')) { const bar = document.querySelector('.tabbar'); window.scrollTo(0, bar.offsetTop); }
+      return;
+    }
+    if (t.hasAttribute('data-grp')) { e.preventDefault(); go({ view: 'objects', grp: t.dataset.grp }); window.scrollTo(0, 0); return; }
+    if (t.hasAttribute('data-unit')) { setUnit(t.dataset.unit); writeHash(false); return; }
+    if (t.hasAttribute('data-heat')) { state.heat = t.dataset.heat; document.getElementById('heatbox').innerHTML = heatmap(cur()); return; }
+    if (t.hasAttribute('data-health')) { state.healthOpen = !state.healthOpen; renderHealth(); return; }
+    if (t.hasAttribute('data-scope')) { state.obj.scope = t.dataset.scope; renderObjects(); return; }
+    if (t.hasAttribute('data-flag')) { const f = t.dataset.flag; state.obj.flags[f] = !state.obj.flags[f]; renderObjects(); return; }
+    if (t.matches('th[data-sort]')) { const k = t.dataset.sort, s = state.obj.sort; state.obj.sort = s.k === k ? { k, dir: -s.dir } : { k, dir: ['obj', 'grp', 'st', 'ow'].indexOf(k) >= 0 ? 1 : -1 }; renderTable(); return; }
+    if (t.matches('#otbl tbody tr[data-obj]') || t.matches('tr[data-open]')) {
+      if (e.target.closest('a')) return;
+      const name = t.dataset.obj || t.dataset.open;
+      if (state.drill && state.drill.obj === name) go({ drill: null }); else drillTo(cur().name, name, true);
+    }
+  });
+  document.addEventListener('change', e => { if (e.target.id === 'grpSel') { go({ grp: e.target.value }, false); } });
+  document.addEventListener('input', e => { if (e.target.id === 'q') { state.obj.q = e.target.value; renderTable(); } });
+  document.addEventListener('keydown', e => {
+    const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
+    if (e.key === 'Escape') { if (typing) { e.target.blur(); return; } if (state.drill) { e.preventDefault(); go({ drill: null }); } return; }
+    if (typing || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target.getAttribute && e.target.getAttribute('role') === 'tab' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const i = VIEWS.findIndex(v => v.k === state.view), n = VIEWS[(i + (e.key === 'ArrowRight' ? 1 : VIEWS.length - 1)) % VIEWS.length];
+      e.preventDefault(); go({ view: n.k, focusTab: true }); return;
+    }
+    if (/^[1-4]$/.test(e.key)) { go({ view: VIEWS[+e.key - 1].k }); return; }
+    if (state.view !== 'objects') return;
+    if (e.key === '/') { e.preventDefault(); const q = document.getElementById('q'); if (q) q.focus(); return; }
+    const rows = state.obj.rows;
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && rows.length) {
+      e.preventDefault();
+      let i = rows.findIndex(o => o.obj === state.obj.sel);
+      i = i < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+      state.obj.sel = rows[i].obj; markSel();
+      const r = document.querySelector('#otbl tbody tr.sel'); if (r) { r.focus({ preventScroll: true }); r.scrollIntoView({ block: 'nearest' }); }
+      if (state.drill) drillTo(cur().name, rows[i].obj, false);
+    } else if (e.key === 'Enter' && state.obj.sel && !(e.target.closest && e.target.closest('a,button'))) {
+      e.preventDefault();
+      if (state.drill) go({ drill: null }); else drillTo(cur().name, state.obj.sel, true);
+    }
+  });
+  window.addEventListener('hashchange', route);
+  window.addEventListener('popstate', route);
+
+  const tip = document.getElementById('tip');
+  document.addEventListener('mousemove', e => {
+    const t = e.target.closest && e.target.closest('[data-tip]');
+    if (!t) { tip.style.display = 'none'; return; }
+    tip.textContent = t.getAttribute('data-tip'); tip.style.display = 'block';
+    const r = tip.getBoundingClientRect();
+    tip.style.left = Math.min(window.innerWidth - r.width - 8, e.clientX + 14) + 'px';
+    tip.style.top = Math.max(8, e.clientY - r.height - 10) + 'px';
+  });
+
+  // the unit comes from the link first, then this viewer's last choice
+  state.unit = readHash().unit || (() => { try { return localStorage.getItem('dash.unit'); } catch (e) { return null; } })() || 'min';
+  renderAll();
+  route();
+})();
+</script>
+</body>
+</html>

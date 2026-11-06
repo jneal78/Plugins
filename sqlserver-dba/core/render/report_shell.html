@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>REPORT TITLE</title>
+<style>
+body{font-family:Segoe UI,Arial,sans-serif;font-size:10.5pt;color:#1b1b1b;max-width:1000px;margin:24px auto;padding:0 16px;background:#fff;line-height:1.4}
+h1{font-size:18pt;border-bottom:2px solid #2c3e50;padding-bottom:4px}h2{font-size:14pt;color:#2c3e50;margin-top:22px;border-bottom:1px solid #ccd}h3{font-size:11.5pt;color:#34495e}
+table{border-collapse:collapse;margin:8px 0;font-size:9.5pt;width:100%}th,td{border:1px solid #c8ccd4;padding:4px 6px;vertical-align:top;text-align:left}th{background:#eef1f5}
+code{font-family:Consolas,monospace;font-size:9pt;background:#f3f4f6;padding:0 2px}pre{background:#f6f8fa;border:1px solid #dde;padding:8px;overflow-x:auto;font-size:8.5pt;white-space:pre-wrap}pre code{background:none}
+.mermaid{text-align:center;margin:10px 0;page-break-inside:avoid}hr{border:0;border-top:1px solid #ccd}
+@media print{body{margin:0 auto;max-width:none}h2{page-break-after:avoid}table,pre{page-break-inside:avoid}}
+</style></head><body><div id="doc"></div>
+<!-- Paste the markdown between the two script tags below. Do not include a literal closing script tag in it. -->
+<script type="text/markdown" id="src">
+# Title
+
+Paste markdown here, including ```mermaid blocks.
+</script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+const md=document.getElementById('src').textContent;
+const r=new marked.Renderer();const base=r.code.bind(r);
+r.code=(code,lang)=>lang==='mermaid'?'<div class="mermaid">'+code.replace(/</g,'&lt;')+'</div>':base(code,lang);
+document.getElementById('doc').innerHTML=marked.parse(md,{renderer:r});
+mermaid.initialize({startOnLoad:false,theme:'default',flowchart:{htmlLabels:true}});
+mermaid.run({querySelector:'.mermaid'});
+</script></body></html>

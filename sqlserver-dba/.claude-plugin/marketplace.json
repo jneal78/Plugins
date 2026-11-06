@@ -1,0 +1,11 @@
+{
+  "name": "sqlserver-dba",
+  "owner": { "name": "sqlserver-dba contributors" },
+  "plugins": [
+    {
+      "name": "sqlserver-dba",
+      "source": "./",
+      "description": "Read-only SQL Server performance and reliability skills for DBAs."
+    }
+  ]
+}

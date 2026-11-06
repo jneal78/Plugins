@@ -1,0 +1,5 @@
+# Byte-exact SQL: never convert line endings (rollback scripts must match the server's text exactly)
+*.sql -text
+# Scripts read by Unix tools keep LF on every checkout
+*.awk text eol=lf
+*.sh text eol=lf

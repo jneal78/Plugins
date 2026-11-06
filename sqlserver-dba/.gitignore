@@ -1,0 +1,8 @@
+# Site folders and outputs never belong in the plugin
+.sqlserver-dba/
+out/
+*.result.txt
+*_result.txt
+# Rendered output from local testing
+*.pdf
+*.png
