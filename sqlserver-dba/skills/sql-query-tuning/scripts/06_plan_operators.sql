@@ -31,29 +31,29 @@ DECLARE @QueryIds nvarchar(max) = NULL,            -- e.g. N'1234,5678'; NULL = 
 
 DECLARE @oid int = OBJECT_ID(@Object);
 
--- 0. Plans selected
-;WITH sel AS (
-    SELECT TOP (@MaxPlans) p.plan_id, p.query_id, p.last_execution_time,
-           CASE WHEN TRY_CAST(p.query_plan AS xml) IS NULL THEN 1 ELSE 0 END AS unparsable
+-- The selected plans are cast to xml ONCE and held in a variable, as <p plan_id query_id> elements in the showplan namespace
+-- so every section's paths apply. Casting them in a CTE that several sections and UNION branches read repeated the
+-- sort and the cast of every plan for each reference.
+DECLARE @plans xml;
+WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+SELECT @plans = (
+    SELECT TOP (@MaxPlans) p.plan_id AS [@plan_id], p.query_id AS [@query_id], TRY_CAST(p.query_plan AS xml)
     FROM sys.query_store_plan p JOIN sys.query_store_query q ON q.query_id = p.query_id
     WHERE (@QueryIds IS NOT NULL AND N',' + REPLACE(@QueryIds, N' ', N'') + N',' LIKE N'%,' + CAST(p.query_id AS nvarchar(20)) + N',%')
        OR (@QueryIds IS NULL AND q.object_id = @oid)
     ORDER BY p.last_execution_time DESC
-)
-SELECT COUNT(*) AS plans_selected, SUM(unparsable) AS plans_not_parsable, MIN(query_id) AS min_query_id, MAX(query_id) AS max_query_id
-FROM sel;
+    FOR XML PATH('p'), TYPE);
+
+-- 0. Plans selected
+;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+SELECT COUNT(*) AS plans_selected, SUM(CASE WHEN p.n.exist('*') = 0 THEN 1 ELSE 0 END) AS plans_not_parsable,
+       MIN(p.n.value('@query_id', 'bigint')) AS min_query_id, MAX(p.n.value('@query_id', 'bigint')) AS max_query_id
+FROM @plans.nodes('/p') p(n);
 
 -- 1. Hot operators
 ;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
-pl AS (
-    SELECT TOP (@MaxPlans) p.plan_id, p.query_id, TRY_CAST(p.query_plan AS xml) AS x
-    FROM sys.query_store_plan p JOIN sys.query_store_query q ON q.query_id = p.query_id
-    WHERE (@QueryIds IS NOT NULL AND N',' + REPLACE(@QueryIds, N' ', N'') + N',' LIKE N'%,' + CAST(p.query_id AS nvarchar(20)) + N',%')
-       OR (@QueryIds IS NULL AND q.object_id = @oid)
-    ORDER BY p.last_execution_time DESC
-),
 ops AS (
-    SELECT pl.query_id, pl.plan_id,
+    SELECT pl.n.value('@query_id', 'bigint') AS query_id, pl.n.value('@plan_id', 'bigint') AS plan_id,
            r.n.value('@NodeId', 'int') AS node,
            r.n.value('@PhysicalOp', 'varchar(40)') AS physical_op,
            r.n.value('@LogicalOp', 'varchar(40)') AS logical_op,
@@ -68,8 +68,8 @@ ops AS (
            r.n.value('@EstimatedTotalSubtreeCost', 'float') AS subtree_cost,
            r.n.value('(./*/Predicate/ScalarOperator/@ScalarString)[1]', 'nvarchar(max)') AS predicate,
            r.n.value('(./*/SeekPredicates//ScalarOperator/@ScalarString)[1]', 'nvarchar(max)') AS seek_on
-    FROM pl
-    CROSS APPLY pl.x.nodes('//RelOp[
+    FROM @plans.nodes('/p') pl(n)
+    CROSS APPLY pl.n.nodes('.//RelOp[
           ((@PhysicalOp = "Index Scan" or @PhysicalOp = "Clustered Index Scan" or @PhysicalOp = "Table Scan"
             or @PhysicalOp = "Key Lookup" or @PhysicalOp = "RID Lookup" or ./IndexScan/@Lookup = 1
             or @PhysicalOp = "Index Spool" or @PhysicalOp = "Table Spool" or @PhysicalOp = "Row Count Spool"
@@ -93,11 +93,8 @@ ORDER BY query_id, plan_id, ISNULL(est_rows_read, est_rows) * est_execs DESC;
 -- 2. Plan warnings, scalar functions called per row, statement-level info
 ;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
 pl AS (
-    SELECT TOP (@MaxPlans) p.plan_id, p.query_id, TRY_CAST(p.query_plan AS xml) AS x
-    FROM sys.query_store_plan p JOIN sys.query_store_query q ON q.query_id = p.query_id
-    WHERE (@QueryIds IS NOT NULL AND N',' + REPLACE(@QueryIds, N' ', N'') + N',' LIKE N'%,' + CAST(p.query_id AS nvarchar(20)) + N',%')
-       OR (@QueryIds IS NULL AND q.object_id = @oid)
-    ORDER BY p.last_execution_time DESC
+    SELECT p.n.value('@query_id', 'bigint') AS query_id, p.n.value('@plan_id', 'bigint') AS plan_id, p.n.query('*') AS x
+    FROM @plans.nodes('/p') p(n)
 ),
 w AS (
     SELECT pl.query_id, pl.plan_id, 'PlanAffectingConvert' AS warning,
@@ -131,11 +128,8 @@ ORDER BY query_id, plan_id, warning;
 -- 3. Missing-index suggestions inside the plans (impact = optimizer's estimated % saving for that statement)
 ;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
 pl AS (
-    SELECT TOP (@MaxPlans) p.plan_id, p.query_id, TRY_CAST(p.query_plan AS xml) AS x
-    FROM sys.query_store_plan p JOIN sys.query_store_query q ON q.query_id = p.query_id
-    WHERE (@QueryIds IS NOT NULL AND N',' + REPLACE(@QueryIds, N' ', N'') + N',' LIKE N'%,' + CAST(p.query_id AS nvarchar(20)) + N',%')
-       OR (@QueryIds IS NULL AND q.object_id = @oid)
-    ORDER BY p.last_execution_time DESC
+    SELECT p.n.value('@query_id', 'bigint') AS query_id, p.n.value('@plan_id', 'bigint') AS plan_id, p.n.query('*') AS x
+    FROM @plans.nodes('/p') p(n)
 ),
 mi AS (
     SELECT pl.query_id, pl.plan_id, g.n.value('@Impact', 'float') AS impact, m.n.query('.') AS mx,
@@ -155,11 +149,8 @@ ORDER BY mi.impact DESC;
 -- 4. Parameter values each plan was compiled for (parameter sniffing: compare good and bad plans of one query)
 ;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
 pl AS (
-    SELECT TOP (@MaxPlans) p.plan_id, p.query_id, TRY_CAST(p.query_plan AS xml) AS x
-    FROM sys.query_store_plan p JOIN sys.query_store_query q ON q.query_id = p.query_id
-    WHERE (@QueryIds IS NOT NULL AND N',' + REPLACE(@QueryIds, N' ', N'') + N',' LIKE N'%,' + CAST(p.query_id AS nvarchar(20)) + N',%')
-       OR (@QueryIds IS NULL AND q.object_id = @oid)
-    ORDER BY p.last_execution_time DESC
+    SELECT p.n.value('@query_id', 'bigint') AS query_id, p.n.value('@plan_id', 'bigint') AS plan_id, p.n.query('*') AS x
+    FROM @plans.nodes('/p') p(n)
 )
 SELECT pl.query_id, pl.plan_id,
        c.n.value('@Column', 'nvarchar(130)') AS parameter,

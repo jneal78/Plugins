@@ -40,7 +40,8 @@ param(
     [string]$TimeZone,
     [string]$OutDir,
     [string]$Compare,
-    [int]$Detail = 15
+    [int]$Detail = 15,
+    [string]$MonitorApps    # a regex for the site's own monitoring or maintenance programs (from the site profile)
 )
 $ErrorActionPreference = 'Stop'
 # -Path may also arrive as one ';'-separated string (pwsh -File called from another shell can't pass an array)
@@ -65,7 +66,7 @@ function StripDb([string]$name) { $p = $name.Split('.'); if ($p.Count -ge 3) { (
 function TempName([string]$name) {
     $name -replace '#(.+?)_{3,}[0-9A-Fa-f]{6,}$', '#$1' -replace '#[0-9A-Fa-f]{8}$', '#(cached temp table)'
 }
-function DbOf([string]$name) { $p = $name.Split('.'); if ($p.Count -ge 3) { $p[0] } else { '' } }
+function DbOf([string]$name) { $p = $name.Split('.'); if ($p.Count -ge 3) { ($p[0..($p.Count - 3)]) -join '.' } else { '' } }   # a database name may itself contain dots
 # The collectors write UTC without an offset. ConvertFrom-Json may already have made a DateTime of it (some PowerShell
 # versions a local time or a DateTimeOffset), so normalize every shape to a UTC DateTime.
 function AsUtc($v) {
@@ -103,7 +104,11 @@ function TextTarget([string]$stmt, [string[]]$tables) {
     if ($tokens.Count -lt 2 -and -not ($tokens.Count -eq 1 -and $tables -contains $tokens[0])) { return '' }
     'text:' + (($tokens | ForEach-Object { $_ -replace '\[', '[[]' -replace '_', '[_]' }) -join '%')
 }
-$monitorApps = 'monitor|sentry|nagios|solarwinds|redgate|idera|spotlight|quest|zabbix|datadog|new relic|newrelic|dynatrace|scom|prtg|paessler|dbatools|sqlwatch|opsmgr|telegraf|prometheus|site24x7|appdynamics|minion|sp_whoisactive|sp_blitz'
+# Known monitoring and maintenance products, as whole names: a bare "monitor" or "quest" would also match application
+# names such as OrderMonitorService or RequestRouter and hide real application deadlocks as tool noise. A site adds its
+# own tools with -MonitorApps. A negative deadlock priority is tagged separately ('low-priority'), whatever the name.
+$monitorApps = '\b(SQL ?Sentry|SolarWinds|Nagios|Redgate|SQL Monitor|Idera|Spotlight|Quest Software|Zabbix|Datadog|New ?Relic|Dynatrace|SCOM|System Center|PRTG|Paessler|dbatools|SQLWATCH|Telegraf|Prometheus|Site24x7|AppDynamics|sp_WhoIsActive|sp_Blitz\w*)\b'
+if ($MonitorApps) { $monitorApps = "$monitorApps|($MonitorApps)" }
 $catalog = [ordered]@{
     'cross-object' = 'D1 lock order across tables'
     'conversion' = 'D2 read, then write the same row'
@@ -112,7 +117,8 @@ $catalog = [ordered]@{
     'two-indexes' = 'D4 two indexes of one table (lookup vs write)'
     'page' = 'D5 a scan under page locks'
     'heap' = 'D6 a heap used as a queue'
-    'range' = 'D7 serializable range locks'
+    'range' = 'D7 serializable range locks (the session runs at serializable)'
+    'range-hint' = 'D7 range locks the code asks for (HOLDLOCK / SERIALIZABLE hint, an upsert with HOLDLOCK), a cascading foreign key or an indexed view'
     'table-lock' = 'D8 lock escalation or table locks'
     'schema' = 'D12 schema locks (DDL, temp tables, metadata queries)'
     'parallel' = 'D13 intra-query parallelism'
@@ -125,7 +131,12 @@ $catalog = [ordered]@{
 }
 
 # ---------------------------------------------------------------------------------------------------------------- read
-$files = @(foreach ($p in $Path) { Get-ChildItem -Path $p -File -ErrorAction SilentlyContinue })
+$files = @(foreach ($p in $Path) {
+    $m = @(Get-ChildItem -Path $p -File -ErrorAction SilentlyContinue)
+    # a mistyped path would otherwise just vanish, and with -Compare its patterns would show as "gone"
+    if (-not $m) { Write-Warning "No input file matches $p" }
+    $m
+})
 if (-not $files) { throw "No input files match: $($Path -join ', ')" }
 if (-not $OutDir) { $OutDir = Split-Path $files[0].FullName }
 $gdir = Join-Path $OutDir 'graphs'
@@ -156,7 +167,9 @@ foreach ($f in $files) {
     $text = $lines -join ''
     $i = $text.IndexOf('{'); $j = $text.LastIndexOf('}')
     if ($i -lt 0 -or $j -le $i) { Write-Warning "$($f.Name): no JSON in it (a sqlcmd error?) - skipped"; continue }
-    $root = $text.Substring($i, $j - $i + 1) | ConvertFrom-Json
+    # a truncated file (a collector cancelled by its timeout) must not stop the whole run
+    try { $root = $text.Substring($i, $j - $i + 1) | ConvertFrom-Json }
+    catch { Write-Warning "$($f.Name): not valid JSON (truncated?) - skipped"; continue }
     $added = 0; $found = 0
     foreach ($e in @($root.deadlocks)) {
         if (-not $e -or -not $e.graph) { continue }
@@ -167,7 +180,7 @@ foreach ($f in $files) {
     }
     $oldest = if ($root.oldest_event_utc) { AsUtc $root.oldest_event_utc } elseif ($root.oldest_utc) { AsUtc $root.oldest_utc } else { $null }
     $sources.Add([pscustomobject]@{ file = $f.Name; instance = [string]$root.server_name; session = [string]$root.xe_session
-            graphs = $found; new = $added; oldest_utc = $(if ($oldest) { $oldest.ToString('yyyy-MM-dd HH:mm') } else { '' }) })
+            graphs = $found; new = $added; oldest_utc = $(if ($oldest) { $oldest.ToString('yyyy-MM-dd HH:mm', $inv) } else { '' }) })
 }
 if ($graphs.Count -eq 0) { Write-Warning 'No deadlock graphs in the input.'; $sources | Format-Table -AutoSize; return }
 
@@ -183,8 +196,12 @@ foreach ($g in $graphs) {
     $procs = @($dl.SelectNodes('process-list/process'))
     if (-not $procs) { continue }
     if ($g.Utc) { $lt = [TimeZoneInfo]::ConvertTimeFromUtc([datetime]::SpecifyKind($g.Utc, 'Utc'), $tz); $approx = '' }
-    else { $lt = ($procs | ForEach-Object { ParseTime $_.GetAttribute('lastbatchstarted') } | Measure-Object -Maximum).Maximum; $approx = '~' }
-    $id = if ($g.Utc) { $g.Utc.ToString('yyyyMMdd_HHmmss_fff') } else { 'x' + $g.Key.Substring(0, 12).ToLowerInvariant() }
+    else {
+        $lt = ($procs | ForEach-Object { ParseTime $_.GetAttribute('lastbatchstarted') } | Where-Object { $_ } | Measure-Object -Maximum).Maximum
+        $approx = '~'
+        if (-not $lt) { $lt = [datetime]::MinValue; $approx = '?' }   # a graph with no time at all: keep it, undated
+    }
+    $id = if ($g.Utc) { $g.Utc.ToString('yyyyMMdd_HHmmss_fff', $inv) } else { 'x' + $g.Key.Substring(0, 12).ToLowerInvariant() }
     $file = Join-Path $gdir "dl_$id.xdl"
     if (-not (Test-Path $file)) { [IO.File]::WriteAllText($file, '<deadlock-list>' + $dl.OuterXml + '</deadlock-list>', $utf8) }
 
@@ -234,13 +251,18 @@ foreach ($g in $graphs) {
             $pnFull = $named.GetAttribute('procname')
             $module = StripDb $pnFull
             $db = DbOf $pnFull
-            $code = $module + ':' + $named.GetAttribute('line') + $(if (-not [object]::ReferenceEquals($named, $inner)) { ' (dynamic SQL)' } else { '' })
-            $sideKey = $code
+            $dyn = if (-not [object]::ReferenceEquals($named, $inner)) { ' (dynamic SQL)' } else { '' }
+            $code = $module + ':' + $named.GetAttribute('line') + $dyn
+            # The pattern key uses the module, not the line: a fix inside the module shifts line numbers, and a key
+            # with lines would show the same deadlock as "gone" plus "new" in a -Compare run. Lines stay in "code".
+            $sideKey = $module + $dyn
         } else {
             $module = ''
             $db = $p.GetAttribute('currentdbname')
             $code = 'adhoc: ' + (Norm $stmt 70)
-            $sideKey = 'adhoc ' + $(if ($qh) { $qh } else { Norm $stmt 60 })
+            # without a query hash, the statement shape (literals removed) is the key: 200 characters, so two ORM
+            # statements that share their first line but differ in the WHERE clause stay apart
+            $sideKey = 'adhoc ' + $(if ($qh) { $qh } else { Norm $stmt 200 })
         }
         if (-not $db) { $db = ($res | Where-Object db | Select-Object -First 1).db }
         $isolation = ($p.GetAttribute('isolationlevel') -replace '\s*\(\d+\)\s*$', '')
@@ -253,7 +275,7 @@ foreach ($g in $graphs) {
         $holds = @(foreach ($r in $res) { foreach ($o in $r.owners) { if ($o.id -eq $pid_) { "$($r.label) $($o.mode)" } } }) -join '; '
         $wants = @(foreach ($r in $res) { foreach ($w in $r.waiters) { if ($w.id -eq $pid_) { "$($r.label) $($w.mode)$(if ($w.req -eq 'convert') { ' (convert)' })" } } }) -join '; '
         $row = [pscustomobject]@{
-            pattern = ''; deadlock = $id; local = $lt.ToString('yyyy-MM-dd HH:mm:ss') + $approx; victim = [bool]($victims -contains $pid_)
+            pattern = ''; deadlock = $id; local = $lt.ToString('yyyy-MM-dd HH:mm:ss', $inv) + $approx; victim = [bool]($victims -contains $pid_)
             side = $sideKey; code = $code; module = $module; db = $db; spid = $p.GetAttribute('spid'); ecid = $p.GetAttribute('ecid')
             isolation = $isolation; tran_name = $p.GetAttribute('transactionname'); trancount = $p.GetAttribute('trancount')
             tran_open_before_batch = [bool]$clientTran; lock_mode = $p.GetAttribute('lockMode'); holds = $holds; waits_for = $wants
@@ -271,7 +293,11 @@ foreach ($g in $graphs) {
     $isParallel = ($res.kind -contains 'exchange') -or ($res.kind -contains 'threadpool') -or (@($spidCount.Values | Where-Object { $_ -gt 1 }).Count -gt 0)
     if ($isParallel) { [void]$tags.Add('parallel') }
     if (($res.kind -contains 'metadata') -or ($modes | Where-Object { $_ -like 'Sch-*' })) { [void]$tags.Add('schema') }
-    if (($modes | Where-Object { $_ -like 'Range*' }) -or ($sideRows.isolation | Where-Object { $_ -like 'serializable*' })) { [void]$tags.Add('range') }
+    # Range locks come from a serializable session, or, at any isolation level, from code that asks for them (HOLDLOCK
+    # or SERIALIZABLE hints, an upsert statement with HOLDLOCK), a cascading foreign key or an indexed view. Only the first points at
+    # the client; the second is the database code, including fixes that add UPDLOCK, HOLDLOCK.
+    if ($sideRows.isolation | Where-Object { $_ -like 'serializable*' }) { [void]$tags.Add('range') }
+    elseif ($modes | Where-Object { $_ -like 'Range*' }) { [void]$tags.Add('range-hint') }
     if ($res | Where-Object { $_.waiters.req -contains 'convert' }) { [void]$tags.Add('conversion') }
     $lockObjs = @($res | Where-Object { $_.kind -in 'key', 'page', 'rid', 'object', 'hobt' -and $_.obj } | Select-Object -ExpandProperty obj -Unique)
     $lockIdx = @($res | Where-Object { $_.kind -in 'key', 'page', 'rid' -and $_.obj } | ForEach-Object { $_.obj + '/' + $_.idx } | Select-Object -Unique)
@@ -283,7 +309,18 @@ foreach ($g in $graphs) {
     if ($res.kind -contains 'page') { [void]$tags.Add('page') }
     if ($res | Where-Object { $_.kind -eq 'object' -and (@($_.owners.mode) + @($_.waiters.mode) | Where-Object { $_ -and $_ -notlike 'Sch-*' }) }) { [void]$tags.Add('table-lock') }
     if ($res.kind -contains 'applock') { [void]$tags.Add('applock') }
-    $bySpid = @($sideRows | Group-Object spid | ForEach-Object { $_.Group[0] })
+    # One row per session. A parallel query shows up as several threads (ecid) of one spid; locks are often held or
+    # waited on by threads other than the first, so combine them all (the first thread alone under-reports).
+    $bySpid = @($sideRows | Group-Object spid | ForEach-Object {
+        $grp = @($_.Group)
+        $m = $grp[0].PSObject.Copy()
+        if ($grp.Count -gt 1) {
+            $m.holds = (@($grp.holds -split '; ' | Where-Object { $_ }) | Select-Object -Unique) -join '; '
+            $m.waits_for = (@($grp.waits_for -split '; ' | Where-Object { $_ }) | Select-Object -Unique) -join '; '
+            $m.victim = [bool](@($grp | Where-Object victim).Count)
+        }
+        $m
+    })
     # same routine on every side, at the same or different lines
     if ($bySpid.Count -gt 1 -and @($bySpid | ForEach-Object { $_.side -replace ':\d*( \(dynamic SQL\))?$', '' } | Select-Object -Unique).Count -eq 1) { [void]$tags.Add('same-code') }
     if ($bySpid.Count -gt 2) { [void]$tags.Add('multi-party') }
@@ -304,7 +341,7 @@ foreach ($g in $graphs) {
     $dlRows.Add([pscustomobject]@{
             id = $id; local = $lt; approx = $approx; key = "$keySides  |  $keyObjects"; sides = $keySides; objects = $keyObjects
             tags = @($tags); victim_sides = (@($sideRows | Where-Object victim | ForEach-Object side | Select-Object -Unique) -join ', ')
-            nproc = $bySpid.Count; procs = $sideRows; res = $res })
+            nproc = $bySpid.Count; procs = $sideRows; sessions = $bySpid; res = $res })
 }
 
 # ---------------------------------------------------------------------------------------------------------------- patterns
@@ -326,7 +363,7 @@ foreach ($grp in $groups) {
     $status = if ($Compare) { if ($old.ContainsKey($grp.Name)) { 'continuing' } else { 'new' } } else { '' }
     $patterns.Add([pscustomobject]@{
             pattern = $label; status = $status; count = $grp.Count
-            first = $times[0].ToString('yyyy-MM-dd HH:mm') + $dls[0].approx; last = $times[-1].ToString('yyyy-MM-dd HH:mm') + $dls[-1].approx
+            first = $times[0].ToString('yyyy-MM-dd HH:mm', $inv) + $dls[0].approx; last = $times[-1].ToString('yyyy-MM-dd HH:mm', $inv) + $dls[-1].approx
             sides = $dls[0].sides; objects = $dls[0].objects
             tags = (($tagCount.GetEnumerator() | Sort-Object Name | ForEach-Object { if ($_.Value -eq $grp.Count) { $_.Name } else { "$($_.Name) ($($_.Value)/$($grp.Count))" } }) -join ', ')
             victims = ((@($dls.victim_sides) | Group-Object | Sort-Object Count -Descending | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join '; ')
@@ -336,14 +373,27 @@ foreach ($grp in $groups) {
 $gone = @()
 if ($Compare) { $gone = @($old.Values | Where-Object { -not ($groups.Name -contains $_.key) }) }
 
-$procRows | Export-Csv (Join-Path $OutDir 'deadlock_processes.csv') -NoTypeInformation -Encoding utf8
-$patterns | Select-Object pattern, status, count, first, last, sides, objects, tags, victims, within_2_min_of_previous, key |
+# CSV cells that start with = + - @ are formulas to Excel; program and host names come from clients, so prefix them with
+# a quote (the pattern key stays exact: -Compare matches on it).
+function NoFormula($rows, [string[]]$keep = @()) {
+    foreach ($r in $rows) {
+        $o = $r.PSObject.Copy()
+        foreach ($pp in $o.PSObject.Properties) {
+            if ($pp.Name -notin $keep -and $pp.Value -is [string] -and $pp.Value -match '^[=+\-@\t\r]') { $pp.Value = "'" + $pp.Value }
+        }
+        $o
+    }
+}
+NoFormula $procRows | Export-Csv (Join-Path $OutDir 'deadlock_processes.csv') -NoTypeInformation -Encoding utf8
+NoFormula ($patterns | Select-Object pattern, status, count, first, last, sides, objects, tags, victims, within_2_min_of_previous, key) @('key') |
     Export-Csv (Join-Path $OutDir 'deadlock_patterns.csv') -NoTypeInformation -Encoding utf8
 
 # ---------------------------------------------------------------------------------------------------------------- report
 $sb = [Text.StringBuilder]::new()
 function L([string]$s = '') { [void]$script:sb.AppendLine($s) }
-function Esc([string]$s) { ($s -replace '\|', '\|' -replace '\r?\n', ' ') }
+# Text from the server (statements, program and host names) is shown, never rendered: HTML-encode it as well as
+# escaping the table separator, so a report rendered with report_shell.html can't be made to run script.
+function Esc([string]$s) { ([Net.WebUtility]::HtmlEncode($s) -replace '\|', '\|' -replace '\r?\n', ' ') }
 function TopList($values, [int]$k = 3) {
     $vals = @($values | Where-Object { $_ -ne $null -and "$_" -ne '' })
     if (-not $vals) { return '' }
@@ -354,7 +404,7 @@ $all = @($dlRows | Sort-Object local)
 $span0 = $all[0].local; $span1 = $all[-1].local
 L "# Deadlock patterns"
 L
-L ("{0} distinct deadlocks, {1:yyyy-MM-dd HH:mm} to {2:yyyy-MM-dd HH:mm} ({3}), {4} patterns. Generated {5:yyyy-MM-dd HH:mm} by Analyze-Deadlocks.ps1." -f $all.Count, $span0, $span1, $tz.Id, $patterns.Count, (Get-Date))
+L ([string]::Format($inv, "{0} distinct deadlocks, {1:yyyy-MM-dd HH:mm} to {2:yyyy-MM-dd HH:mm} ({3}), {4} patterns. Generated {5:yyyy-MM-dd HH:mm} by Analyze-Deadlocks.ps1.", $all.Count, $span0, $span1, $tz.Id, $patterns.Count, (Get-Date)))
 L
 L "**Sources**"
 L
@@ -375,7 +425,7 @@ L ("**By day:** " + ((@($all | Group-Object { $_.local.ToString('yyyy-MM-dd ddd'
 L
 L ("**By hour of day:** " + ((@($all | Group-Object { $_.local.Hour } | Sort-Object { [int]$_.Name } | ForEach-Object { '{0:00}h {1}' -f [int]$_.Name, $_.Count })) -join ' · '))
 L
-L ("**Victims by program:** " + (TopList ($procRows | Where-Object victim | ForEach-Object { if ($_.app) { $_.app } else { '(blank program name)' } }) 8))
+L ("**Victims by program:** " + (Esc (TopList ($procRows | Where-Object victim | ForEach-Object { if ($_.app) { $_.app } else { '(blank program name)' } }) 8)))
 L
 
 $detailN = [Math]::Min($Detail, $patterns.Count)
@@ -392,7 +442,8 @@ foreach ($p in ($patterns | Select-Object -First $detailN)) {
     L
     L "| Side | Code (innermost < outer) | Statement | Holds | Waits for | Isolation / transaction | Program · host · login | Lost |"
     L "|---|---|---|---|---|---|---|---|"
-    $sideGroups = @($dls | ForEach-Object { $_.procs | Group-Object spid | ForEach-Object { $_.Group[0] } } | Group-Object side)
+    # one row per session (parallel threads merged), grouped by the code and line each side ran
+    $sideGroups = @($dls | ForEach-Object { $_.sessions } | Group-Object code)
     $si = 0
     foreach ($sg in $sideGroups) {
         $si++
@@ -421,12 +472,13 @@ foreach ($p in ($patterns | Select-Object -First $detailN)) {
     $allProcs = @($dls | ForEach-Object { $_.procs })
     if ($p._tags.ContainsKey('same-code')) { $signals.Add('Both sides run the same code: two sessions worked on the same key at the same moment. Find out why (two workers on one queue item, a client retry after a timeout, a double submission, message redelivery).') }
     if ($p._tags.ContainsKey('same-index') -and -not $p._tags.ContainsKey('same-code')) { $signals.Add('Two different routines take the same index''s rows for one key in different orders: the same business entity (document, order, message) was being processed twice at once. Find out why it reaches two sessions together.') }
-    $sideHosts = @($dls | ForEach-Object { @($_.procs | Group-Object spid | ForEach-Object { $_.Group[0].host }) -join '|' } | Where-Object { ($_ -split '\|' | Select-Object -Unique).Count -gt 1 })
+    $sideHosts = @($dls | ForEach-Object { @($_.sessions.host) -join '|' } | Where-Object { ($_ -split '\|' | Select-Object -Unique).Count -gt 1 })
     if (($p._tags.ContainsKey('same-index') -or $p._tags.ContainsKey('same-code')) -and $sideHosts.Count) { $signals.Add("In $($sideHosts.Count) of $($p.count) deadlocks the sides came from different hosts: separate application servers or workers handle the same key at the same time, so the fix may belong in how work is shared out, not only in the database.") }
     if ($p._tags.ContainsKey('client-tran')) { $signals.Add('A side''s transaction started before its current batch: the client holds the transaction open across round trips (TransactionScope, an ORM unit of work, autocommit off). Every statement in that transaction keeps its locks until the client commits.') }
     if ($p._tags.ContainsKey('implicit-tran')) { $signals.Add('implicit_transaction: the driver runs with autocommit off (common with JDBC and ODBC defaults), so even reads keep their locks until the client commits.') }
     if ($p._tags.ContainsKey('distributed')) { $signals.Add('A distributed transaction (DTC): a client TransactionScope that spans two connections or resources; usually serializable by default.') }
-    if ($p._tags.ContainsKey('range')) { $signals.Add('Serializable range locks. Procedures rarely ask for this; the client usually does (TransactionScope defaults to serializable). Check the program in the side table.') }
+    if ($p._tags.ContainsKey('range')) { $signals.Add('A side runs at serializable isolation, so its reads take range locks. Procedures rarely ask for this; the client usually does (TransactionScope defaults to serializable). Check the program in the side table.') }
+    if ($p._tags.ContainsKey('range-hint')) { $signals.Add('Range locks at a normal isolation level: the code asks for them (a HOLDLOCK or SERIALIZABLE table hint, an upsert statement with HOLDLOCK), or a cascading foreign key or an indexed view takes them. Read the code at the line, and 17 section 5. This includes local fixes that added UPDLOCK, HOLDLOCK. Not a client setting.') }
     if ($p._tags.ContainsKey('low-priority') -or $p._tags.ContainsKey('monitoring-tool')) { $signals.Add('A monitoring or maintenance tool is a side (low deadlock priority or a known product name). It loses by design; count it apart from application deadlocks and fix the check, not the application.') }
     if ($p._tags.ContainsKey('agent-job')) { $signals.Add('A SQL Agent job is a side: name it and get its schedule with script 18 (ids: ' + ((@($allProcs.job | Where-Object { $_ } | ForEach-Object { ($_ -split ' ')[0] } | Select-Object -Unique)) -join ', ') + ').') }
     if ($p._tags.ContainsKey('parallel')) { $signals.Add('Intra-query parallelism: one statement deadlocked with its own threads. The fix is that statement''s plan (sql-query-tuning), not concurrency.') }
@@ -466,7 +518,7 @@ foreach ($p in ($patterns | Select-Object -First $detailN)) {
             L ("- sql-query-tuning: read the plan of ``{0}``{1} in ``{2}``: it is a side of {3} ({4} deadlocks, {5} to {6}); it holds {7} and waits for {8}. Does it scan, and which predicate stops a seek?" -f $h.code, $(if ($h.query_hash) { " (query_hash $($h.query_hash))" } else { '' }), $h.db, $p.pattern, $p.count, $p.first, $p.last, $(if ($h.holds) { $h.holds } else { 'nothing named' }), $(if ($h.waits_for) { $h.waits_for } else { 'nothing named' }))
         }
         foreach ($h in @($sideGroups | ForEach-Object { $_.Group[0] } | Where-Object { $_.query_hash -or $_.module } | Select-Object -First 2)) {
-            L ("- sql-workload-hotspots script 08: who sends ``{0}`` (@QueryHash = {1}, or @Object = '{2}'), and when (section 5)." -f $h.code, $(if ($h.query_hash) { $h.query_hash } else { 'NULL' }), $h.module)
+            L ("- sql-workload-hotspots script 08: who sends ``{0}`` (@QueryHash = {1}, or @Object = N'{2}'), and when (section 5)." -f $h.code, $(if ($h.query_hash) { $h.query_hash } else { 'NULL' }), ($h.module -replace "'", "''"))
         }
         L
     }
@@ -477,7 +529,7 @@ if ($patterns.Count -gt $detailN) { L "$($patterns.Count - $detailN) smaller pat
 [IO.File]::WriteAllText((Join-Path $OutDir 'deadlock_patterns.md'), $sb.ToString(), $utf8)
 
 # ---------------------------------------------------------------------------------------------------------------- console
-Write-Output ("{0} distinct deadlocks from {1} file(s), {2:yyyy-MM-dd HH:mm} to {3:yyyy-MM-dd HH:mm} ({4}), {5} patterns" -f $all.Count, $files.Count, $span0, $span1, $tz.Id, $patterns.Count)
+Write-Output ([string]::Format($inv, "{0} distinct deadlocks from {1} file(s), {2:yyyy-MM-dd HH:mm} to {3:yyyy-MM-dd HH:mm} ({4}), {5} patterns", $all.Count, $files.Count, $span0, $span1, $tz.Id, $patterns.Count))
 foreach ($p in ($patterns | Select-Object -First 10)) {
     Write-Output ("`n[{0}] {1}x {2} .. {3} {4}`n   sides:  {5}`n   locked: {6}`n   tags:   {7}`n   lost:   {8}" -f $p.pattern, $p.count, $p.first, $p.last, $p.status, $p.sides, $p.objects, $p.tags, $p.victims)
 }

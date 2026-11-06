@@ -9,7 +9,10 @@ $1 == "PC1" { q[$2] = $3 - p[$2] }
 $1 == "WT"  { w[$2] = $3; wn[$2] = $4 }
 $1 == "WT1" { d[$2] = $3 - w[$2]; dn[$2] = $4 - wn[$2] }
 END {
-  s = t1 - t0; printf "sample %.1f s\n\nCOUNTERS\n", s
+  s = t1 - t0
+  if (s < 0) s += 86400   # the sample crossed midnight: the timestamps carry the time of day only
+  if (t1 == "" || s <= 0) { print "sample length unknown (T0 or T1 missing): rates not computed"; exit 1 }
+  printf "sample %.1f s\n\nCOUNTERS\n", s
   for (c in q) printf "%-34s %12.1f /s\n", c, q[c] / s
   print "\nIO by database id (2 = tempdb; busiest first)"
   for (g in R) if (R[g] + W[g] > 50) printf "%-10s reads/s %6.0f writes/s %6.0f readMB/s %6.1f writeMB/s %6.1f read_ms %5.1f write_ms %5.1f\n", g, R[g]/s, W[g]/s, BR[g]/1048576/s, BW[g]/1048576/s, (R[g] ? SR[g]/R[g] : 0), (W[g] ? SW[g]/W[g] : 0)

@@ -74,26 +74,40 @@ SELECT CASE win WHEN 'A' THEN 'window' ELSE 'compare' END AS period,
        SUM(CASE WHEN execution_type = 4 THEN execs ELSE 0 END) AS errors
 FROM r GROUP BY win ORDER BY win;
 
+-- Sections 2 and 3 aggregate the runtime stats per statement and window FIRST (a few thousand rows), and only then
+-- look up names. Resolving names per runtime-stats row, with the dropped-object fold in the join, took minutes on a
+-- busy server; the same work on aggregated rows takes seconds.
+
 -- 2. Top objects by CPU in the window, with the comparison window
-;WITH live AS (
-    SELECT q.query_hash, MIN(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id)) AS obj
-    FROM sys.query_store_query q
-    WHERE q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NOT NULL
-    GROUP BY q.query_hash
-),
-r AS (
-    SELECT CASE WHEN q.object_id = 0 THEN N'(ad hoc, all)'
-                ELSE COALESCE(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id), lv.obj,
-                              N'(dropped id ' + CAST(q.object_id AS nvarchar(12)) + N')') END AS obj,
-           CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
-           rs.plan_id, rs.execution_type, rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
-           rs.avg_logical_io_reads * rs.count_executions AS reads, rs.avg_duration * rs.count_executions AS dur_us, rs.max_dop
+;WITH agg AS (
+    SELECT p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
+           SUM(rs.count_executions) AS execs, SUM(rs.avg_cpu_time * rs.count_executions) AS cpu_us,
+           SUM(rs.avg_logical_io_reads * rs.count_executions) AS reads, SUM(rs.avg_duration * rs.count_executions) AS dur_us,
+           MAX(rs.max_dop) AS max_dop, COUNT(DISTINCT rs.plan_id) AS plans,
+           SUM(CASE WHEN rs.execution_type = 3 THEN rs.count_executions ELSE 0 END) AS timeouts,
+           SUM(CASE WHEN rs.execution_type = 4 THEN rs.count_executions ELSE 0 END) AS errors
     FROM sys.query_store_runtime_stats rs
     JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
     JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
-    JOIN sys.query_store_query q ON q.query_id = p.query_id
-    LEFT JOIN live lv ON lv.query_hash = q.query_hash AND q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NULL
     WHERE (i.start_time >= @a0 AND i.start_time < @a1) OR (i.start_time >= @b0 AND i.start_time < @b1)
+    GROUP BY p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END
+),
+named AS (
+    SELECT a.*, q.query_hash, q.object_id,
+           CASE WHEN q.object_id = 0 THEN NULL ELSE OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id) END AS live_name
+    FROM agg a JOIN sys.query_store_query q ON q.query_id = a.query_id
+),
+fold AS (   -- objects dropped and recreated: the live name of a statement with the same query_hash. Built once over
+            -- all statements (under a second) and hash-joined; filtering it by the rows above re-ran their aggregation.
+    SELECT q2.query_hash, MIN(OBJECT_SCHEMA_NAME(q2.object_id) + N'.' + OBJECT_NAME(q2.object_id)) AS obj
+    FROM sys.query_store_query q2
+    WHERE q2.object_id <> 0 AND OBJECT_NAME(q2.object_id) IS NOT NULL
+    GROUP BY q2.query_hash
+),
+r AS (
+    SELECT n.*, CASE WHEN n.object_id = 0 THEN N'(ad hoc, all)'
+                     ELSE COALESCE(n.live_name, f.obj, N'(dropped id ' + CAST(n.object_id AS nvarchar(12)) + N')') END AS obj
+    FROM named n LEFT HASH JOIN fold f ON f.query_hash = n.query_hash AND n.live_name IS NULL AND n.object_id <> 0
 )
 SELECT TOP (@TopN) obj,
        CAST(SUM(CASE WHEN win = 'A' THEN cpu_us END) / 60e6 AS decimal(12,1)) AS cpu_min,
@@ -105,35 +119,42 @@ SELECT TOP (@TopN) obj,
        CAST(SUM(CASE WHEN win = 'A' THEN reads END) * 8 / 1048576.0 AS decimal(12,1)) AS reads_gb,
        CAST(SUM(CASE WHEN win = 'A' THEN dur_us END) / 60e6 AS decimal(12,1)) AS duration_min,
        MAX(CASE WHEN win = 'A' THEN max_dop END) AS max_dop,
-       COUNT(DISTINCT CASE WHEN win = 'A' THEN plan_id END) AS plans,
-       SUM(CASE WHEN win = 'A' AND execution_type = 3 THEN execs ELSE 0 END) AS timeouts,
-       SUM(CASE WHEN win = 'A' AND execution_type = 4 THEN execs ELSE 0 END) AS errors
+       SUM(CASE WHEN win = 'A' THEN plans END) AS plans,
+       SUM(CASE WHEN win = 'A' THEN timeouts ELSE 0 END) AS timeouts,
+       SUM(CASE WHEN win = 'A' THEN errors ELSE 0 END) AS errors
 FROM r
 GROUP BY obj
 ORDER BY SUM(CASE WHEN win = 'A' THEN cpu_us END) DESC;
 
 -- 3. Top statements by CPU in the window (one row per query_hash), with the comparison window
-;WITH live AS (
-    SELECT q.query_hash, MIN(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id)) AS obj
-    FROM sys.query_store_query q
-    WHERE q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NOT NULL
-    GROUP BY q.query_hash
-),
-r AS (
-    SELECT q.query_hash, q.query_id, q.query_text_id,
-           CASE WHEN q.object_id = 0 THEN N'(ad hoc)'
-                ELSE COALESCE(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id), lv.obj,
-                              N'(dropped id ' + CAST(q.object_id AS nvarchar(12)) + N')') END AS obj,
-           CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
-           rs.plan_id, rs.execution_type, rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
-           rs.avg_logical_io_reads * rs.count_executions AS reads, rs.avg_duration * rs.count_executions AS dur_us,
-           rs.avg_rowcount * rs.count_executions AS row_total, rs.max_dop
+;WITH agg AS (
+    SELECT p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
+           SUM(rs.count_executions) AS execs, SUM(rs.avg_cpu_time * rs.count_executions) AS cpu_us,
+           SUM(rs.avg_logical_io_reads * rs.count_executions) AS reads, SUM(rs.avg_duration * rs.count_executions) AS dur_us,
+           SUM(rs.avg_rowcount * rs.count_executions) AS row_total, MAX(rs.max_dop) AS max_dop, COUNT(DISTINCT rs.plan_id) AS plans,
+           SUM(CASE WHEN rs.execution_type = 3 THEN rs.count_executions ELSE 0 END) AS timeouts,
+           SUM(CASE WHEN rs.execution_type = 4 THEN rs.count_executions ELSE 0 END) AS errors
     FROM sys.query_store_runtime_stats rs
     JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
     JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
-    JOIN sys.query_store_query q ON q.query_id = p.query_id
-    LEFT JOIN live lv ON lv.query_hash = q.query_hash AND q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NULL
     WHERE (i.start_time >= @a0 AND i.start_time < @a1) OR (i.start_time >= @b0 AND i.start_time < @b1)
+    GROUP BY p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END
+),
+named AS (
+    SELECT a.*, q.query_hash, q.query_text_id, q.object_id,
+           CASE WHEN q.object_id = 0 THEN NULL ELSE OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id) END AS live_name
+    FROM agg a JOIN sys.query_store_query q ON q.query_id = a.query_id
+),
+fold AS (
+    SELECT q2.query_hash, MIN(OBJECT_SCHEMA_NAME(q2.object_id) + N'.' + OBJECT_NAME(q2.object_id)) AS obj
+    FROM sys.query_store_query q2
+    WHERE q2.object_id <> 0 AND OBJECT_NAME(q2.object_id) IS NOT NULL
+    GROUP BY q2.query_hash
+),
+r AS (
+    SELECT n.*, CASE WHEN n.object_id = 0 THEN N'(ad hoc)'
+                     ELSE COALESCE(n.live_name, f.obj, N'(dropped id ' + CAST(n.object_id AS nvarchar(12)) + N')') END AS obj
+    FROM named n LEFT HASH JOIN fold f ON f.query_hash = n.query_hash AND n.live_name IS NULL AND n.object_id <> 0
 ),
 s AS (
     SELECT query_hash, MAX(obj) AS obj, MAX(query_id) AS last_query_id, MAX(query_text_id) AS query_text_id,
@@ -143,9 +164,9 @@ s AS (
            SUM(CASE WHEN win = 'A' THEN reads END) AS rd_a, SUM(CASE WHEN win = 'B' THEN reads END) AS rd_b,
            SUM(CASE WHEN win = 'A' THEN dur_us END) AS dur_a, SUM(CASE WHEN win = 'A' THEN row_total END) AS rows_a,
            MAX(CASE WHEN win = 'A' THEN max_dop END) AS max_dop,
-           COUNT(DISTINCT CASE WHEN win = 'A' THEN plan_id END) AS plans,
-           SUM(CASE WHEN win = 'A' AND execution_type = 3 THEN execs ELSE 0 END) AS timeouts,
-           SUM(CASE WHEN win = 'A' AND execution_type = 4 THEN execs ELSE 0 END) AS errors
+           SUM(CASE WHEN win = 'A' THEN plans END) AS plans,
+           SUM(CASE WHEN win = 'A' THEN timeouts ELSE 0 END) AS timeouts,
+           SUM(CASE WHEN win = 'A' THEN errors ELSE 0 END) AS errors
     FROM r GROUP BY query_hash
 )
 SELECT TOP (@TopN) s.obj, s.last_query_id, CONVERT(varchar(20), s.query_hash, 1) AS query_hash,

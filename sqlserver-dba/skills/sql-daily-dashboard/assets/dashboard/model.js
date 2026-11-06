@@ -324,12 +324,12 @@
   // worker time, so a parallel query counts every thread, as the CPU meter does.
   function pctOfServer(cpuMin, minutes, cpus) { return cpus > 0 && minutes > 0 ? 100 * cpuMin / (cpus * minutes) : null; }
 
-  // A ready-to-paste request for Claude (with the sqlserver-performance-analysis skill) to profile one object.
+  // A ready-to-paste request for Claude (with the sqlserver-dba skills) to profile one object.
   function drillPrompt(model, db, o) {
     var m = model.meta;
     var p = pctOfServer(o.c.cpu_min, m.hours * 60, m.cpu_count);
     var lines = [
-      'Use the ' + (m.drill.skill || 'sqlserver-performance-analysis') + ' skill to profile ' + (o.kind === 'adhoc' ? 'ad hoc query_hash ' + o.qhash : o.obj) +
+      'Use the ' + (m.drill.skill || 'sqlserver-dba') + ' skill to profile ' + (o.kind === 'adhoc' ? 'ad hoc query_hash ' + o.qhash : o.obj) +
         ' in ' + db.name + ' on ' + m.server + ' (read-only).',
       'Dashboard ' + m.day_c + ', 00:00-' + pad(m.hours) + ':00: ' + o.c.cpu_min.toFixed(1) + ' CPU-min today' +
         (p === null ? '' : ' (' + (p < 0.1 ? p.toFixed(3) : p.toFixed(2)) + '% of the server\'s ' + m.cpu_count + ' CPUs)') + ' vs ' + o.a.cpu_min.toFixed(1) +
@@ -343,15 +343,17 @@
     return lines.filter(Boolean).join('\n');
   }
   function pad(h) { return (h < 10 ? '0' : '') + h; }
+  // a value inside an N'...' literal: quotes doubled, so an object name with ' still pastes as valid SQL
+  function sqlStr(s) { return String(s).replace(/'/g, "''"); }
 
   // EDIT ME values for the skill's scripts, so the drill-down can show what to paste.
   function scriptParams(o) {
     var ids = o.stmts.map(function (s) { return s.query_id; }).slice(0, 5).join(',');
     return [
-      { script: '05_qs_object_profile.sql', edit: o.kind === 'adhoc' ? null : "@Object = N'" + o.obj + "'" },
+      { script: '05_qs_object_profile.sql', edit: o.kind === 'adhoc' ? null : "@Object = N'" + sqlStr(o.obj) + "'" },
       { script: '06_plan_operators.sql', edit: ids ? "@QueryIds = '" + ids + "'" : null },
-      { script: '08_who_runs_it.sql', edit: o.kind === 'adhoc' ? "@QueryHash = " + o.qhash : "@Object = N'" + o.obj + "'" },
-      { script: '09_errors_timeouts.sql', edit: (o.c.errors || o.c.timeouts) ? "@Object = N'" + o.obj + "'" : null }
+      { script: '08_who_runs_it.sql', edit: o.kind === 'adhoc' ? "@QueryHash = " + o.qhash : "@Object = N'" + sqlStr(o.obj) + "'" },
+      { script: '09_errors_timeouts.sql', edit: (o.c.errors || o.c.timeouts) ? "@Object = N'" + sqlStr(o.obj) + "'" : null }
     ].filter(function (x) { return x.edit; });
   }
 

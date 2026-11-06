@@ -101,20 +101,22 @@ function Get-SqlJson([string]$Database, [string]$SqlFile, [hashtable]$Vars) {
 }
 
 function Get-Candidates([string]$Path) {
-    # Reads the findings ledger (a markdown file): '## Done', '## Ready', '## Open' sections holding tables whose first
-    # column is 'Item'. Object names in `backticks` and 0x query hashes in a row become its match keys.
+    # Reads the findings ledger (a markdown file): '## Done', '## Ready', '## Open', '## Watch' sections holding tables
+    # whose first column is 'Item'. Object names in `backticks` and 0x query hashes in a row become its match keys.
+    # Cells are split on every unescaped '|', so empty cells keep their place and compact tables (|a|b|) work.
     $list = @()
     if (-not $Path -or -not (Test-Path $Path)) { return $list }
     $status = $null; $header = $null
     foreach ($line in (Get-Content $Path -Encoding utf8)) {
         if ($line -match '^##\s+(.+)$') {
             $h = $Matches[1]
-            $status = if ($h -match '^Done') { 'done' } elseif ($h -match '^Ready') { 'ready' } elseif ($h -match '^Open') { 'open' } else { $null }
+            $status = if ($h -match '^Done') { 'done' } elseif ($h -match '^Ready') { 'ready' } elseif ($h -match '^Open') { 'open' }
+                      elseif ($h -match '^Watch') { 'watch' } else { $null }
             $header = $null
             continue
         }
         if (-not $status -or $line -notmatch '^\s*\|' -or $line -match '^\s*\|\s*:?-') { continue }
-        $cells = @(($line.Trim() -replace '^\||\|$', '') -split '\s\|\s' | ForEach-Object { $_.Trim() })
+        $cells = @([regex]::Split(($line.Trim() -replace '^\|', '' -replace '(?<!\\)\|$', ''), '(?<!\\)\|') | ForEach-Object { $_.Trim() -replace '\\\|', '|' })
         if ($cells[0] -eq 'Item') { $header = $cells; continue }
         $keys = @([regex]::Matches($cells[0], '`([^`]+)`') | ForEach-Object { $_.Groups[1].Value })
         $keys += @([regex]::Matches($line, '0x[0-9A-Fa-f]{16}') | ForEach-Object { $_.Value.ToUpper() -replace '^0X', '0x' })
@@ -129,13 +131,13 @@ function Get-Candidates([string]$Path) {
 }
 
 # Date and time of the run, so several runs a day (or a run past midnight) each keep their own page
-$stamp = Get-Date -Format 'yyyy-MM-dd_HHmm'
+$stamp = (Get-Date).ToString('yyyy-MM-dd_HHmm', [Globalization.CultureInfo]::InvariantCulture)
 if ($FromJson) {
     $json = [IO.File]::ReadAllText((Resolve-Path $FromJson).Path, $utf8)
     $null = $json | ConvertFrom-Json
     # Re-render under the data file's own stamp: dashboard_<yyyy-MM-dd>[_HHmm].json
     $stamp = ([IO.Path]::GetFileNameWithoutExtension($FromJson) -replace '^.*?_(\d{4}-\d{2}-\d{2}(_\d{4})?)$', '$1')
-    if ($stamp -notmatch '^\d{4}-\d{2}-\d{2}(_\d{4})?$') { $stamp = Get-Date -Format 'yyyy-MM-dd_HHmm' }
+    if ($stamp -notmatch '^\d{4}-\d{2}-\d{2}(_\d{4})?$') { $stamp = (Get-Date).ToString('yyyy-MM-dd_HHmm', [Globalization.CultureInfo]::InvariantCulture) }
 } else {
     $here = $PSScriptRoot
     # The site's own SQL (groups files, business metrics) runs on the server too, so it gets the same read-only check
@@ -175,7 +177,7 @@ if ($FromJson) {
 
     $cands = Get-Candidates (Resolve-CfgPath $cfg.candidates)
     $meta = [ordered]@{
-        generated    = (Get-Date -Format 's')
+        generated    = (Get-Date).ToString('s', [Globalization.CultureInfo]::InvariantCulture)
         title        = $cfg.title
         server       = $cfg.server
         environment  = $cfg.environment
@@ -204,7 +206,9 @@ if ($html -notmatch [regex]::Escape('/*__DASHBOARD_DATA__*/null')) { throw "Temp
 $html = [regex]::Replace($html, '(?m)^.*<!--DEV-->.*\r?\n?', '')
 $modelJs = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'model.js'), $utf8)
 $html = [regex]::Replace($html, '<script src="[^"]*model\.js"></script><!--MODEL-->', { param($m) "<script>`n" + $modelJs + "`n</script>" })
-$html = $html.Replace('/*__DASHBOARD_DATA__*/null', $json.Replace('</', '<\/'))
+# Every '<' in the data becomes < (the same character to JavaScript): query text containing '</script>' or '<!--'
+# could otherwise end the script element early or put the HTML parser in a state where the page stays blank.
+$html = $html.Replace('/*__DASHBOARD_DATA__*/null', $json.Replace('<', '<'))
 $page = Join-Path $outDir "Dashboard_$stamp.html"
 [IO.File]::WriteAllText($page, $html, $utf8)
 [IO.File]::WriteAllText((Join-Path $outDir 'Dashboard_latest.html'), $html, $utf8)

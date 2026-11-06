@@ -910,7 +910,7 @@ const RAW = /*__DASHBOARD_DATA__*/null || window.DASH_DATA;
     const list = worse.length ? worse : db.objects.filter(o => o.grp === grp && o.c.cpu_min > 0).sort((x, y) => y.c.cpu_min - x.c.cpu_min).slice(0, 3);
     const biz = M.business.filter(b => b.group === grp);
     const prompts = list.map(o => DashModel.drillPrompt(M, db, o).split('\n'));
-    const out = ['Use the ' + (meta.drill.skill || 'sqlserver-performance-analysis') + ' skill to review the ' + grp + ' integration in ' + db.name + ' on ' + meta.server + ' (read-only). This is one request covering the whole integration, for the DBA or the vendor.',
+    const out = ['Use the ' + (meta.drill.skill || 'sqlserver-dba') + ' skill to review the ' + grp + ' integration in ' + db.name + ' on ' + meta.server + ' (read-only). This is one request covering the whole integration, for the DBA or the vendor.',
       'Dashboard ' + meta.day_c + ', 00:00-' + pad2(meta.hours) + ':00: ' + grp + ' used ' + g.c.cpu_min.toFixed(1) + ' CPU-min today vs ' + g.a.cpu_min.toFixed(1) + ' on ' + meta.day_a + ' and ' + g.b.cpu_min.toFixed(1) +
         ' on the baseline ' + meta.day_b + '; ' + plural(g.c.timeouts, 'timeout') + ' (' + nf(g.a.timeouts) + ' a week ago), ' + plural(g.c.errors, 'error') + ' (' + nf(g.a.errors) + ' a week ago).'];
     biz.forEach(b => out.push((bizAlarm(b) ? 'Business alarm: ' : 'Business: ') + (b.hourly.length ? bizWhy(b) + ', same hours (' + (b.good === 'low' ? 'lower' : 'higher') + ' is better).' : b.label + ': no data for these hours.')));
@@ -1014,7 +1014,7 @@ const RAW = /*__DASHBOARD_DATA__*/null || window.DASH_DATA;
       '<div class="row-ch"><div class="panel box"><h3>Statement movers, net per object</h3><div class="win">Statements whose CPU moved by 5 CPU-min or more, added up per object. "Rewritten" = old statements replaced by new ones, so only the net counts.</div>' + movers + '</div>' +
       '<div style="display:grid;gap:12px;align-content:start"><div class="panel box"><h3>Waits</h3><div class="win">wait-min by category, ' + winTxt() + '</div>' + waits + '</div>' +
       '<div class="panel box"><h3>Parallelism waits by object</h3><div class="win">wait-min, today vs a week ago</div>' + parT + '</div></div></div>' +
-      '<div class="sect-head"><h2>Candidate list</h2><span class="hint">' + plural(M.candidates.length, 'item') + ' the DBA already knows about: ' + ['ready', 'open', 'done'].map(s => M.candidates.filter(c => c.status === s).length + ' ' + s).join(', ') + '</span></div>' +
+      '<div class="sect-head"><h2>Candidate list</h2><span class="hint">' + plural(M.candidates.length, 'item') + ' the DBA already knows about: ' + ['ready', 'open', 'watch', 'done'].map(s => M.candidates.filter(c => c.status === s).length + ' ' + s).join(', ') + '</span></div>' +
       '<div class="panel box">' + candT + '</div>';
   }
 

@@ -14,7 +14,10 @@
               If the object was recompiled or its plan evicted during the sample, its counters restart and the
               row is flagged 'counters reset': run the sample again.
               Run it at a representative time; a 5-minute sample at a quiet moment says little about the peak.
-    Run     : sqlcmd -S <server> -d <db> -E -I -W -s"|" -i 07_live_delta_benchmark.sql
+              stmt_execs: per cached plan, the busiest statement's execution count, summed over the object's plans.
+    Timeout : the batch includes the WAITFOR, so -t must exceed @Sample: the sample plus 2 minutes (420 s for the
+              default 5 minutes). The usual -t 60 / 120 would cancel it before the second reading.
+    Run     : sqlcmd -S <server> -d <db> -E -I -W -s"|" -t 420 -i 07_live_delta_benchmark.sql
 */
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
@@ -43,11 +46,18 @@ m AS (
           SELECT object_id, execution_count, total_worker_time, total_logical_reads, total_elapsed_time FROM sys.dm_exec_trigger_stats WHERE database_id = DB_ID()) x
     GROUP BY object_id
 ),
-st AS (
-    SELECT t.objectid AS object_id, MAX(qs.execution_count) AS n, SUM(qs.total_worker_time) AS cpu, SUM(qs.total_logical_reads) AS rd
-    FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
-    WHERE t.dbid = DB_ID() AND t.objectid IN (SELECT oid FROM objs)
-    GROUP BY t.objectid
+mh AS (   -- the objects' cached batches, from the per-module stats (no text lookup over the whole plan cache)
+    SELECT object_id, sql_handle FROM sys.dm_exec_procedure_stats WHERE database_id = DB_ID() AND object_id IN (SELECT oid FROM objs)
+    UNION SELECT object_id, sql_handle FROM sys.dm_exec_function_stats WHERE database_id = DB_ID() AND object_id IN (SELECT oid FROM objs)
+    UNION SELECT object_id, sql_handle FROM sys.dm_exec_trigger_stats WHERE database_id = DB_ID() AND object_id IN (SELECT oid FROM objs)
+),
+sp AS (   -- per object and cached plan: statement executions = the busiest statement's count in that plan
+    SELECT mh.object_id, qs.plan_handle, MAX(qs.execution_count) AS n, SUM(qs.total_worker_time) AS cpu, SUM(qs.total_logical_reads) AS rd
+    FROM mh JOIN sys.dm_exec_query_stats qs ON qs.sql_handle = mh.sql_handle
+    GROUP BY mh.object_id, qs.plan_handle
+),
+st AS (   -- summed over the object's plans (a MAX across plans undercounts when calls are split between plans)
+    SELECT object_id, SUM(n) AS n, SUM(cpu) AS cpu, SUM(rd) AS rd FROM sp GROUP BY object_id
 ),
 cur AS (
     SELECT o.name, o.oid, m.n, m.cpu, m.rd, m.el, st.n AS sn, st.cpu AS scpu, st.rd AS srd
@@ -83,11 +93,18 @@ m AS (
           SELECT object_id, execution_count, total_worker_time, total_logical_reads, total_elapsed_time FROM sys.dm_exec_trigger_stats WHERE database_id = DB_ID()) x
     GROUP BY object_id
 ),
+mh AS (
+    SELECT object_id, sql_handle FROM sys.dm_exec_procedure_stats WHERE database_id = DB_ID() AND object_id IN (SELECT oid FROM objs)
+    UNION SELECT object_id, sql_handle FROM sys.dm_exec_function_stats WHERE database_id = DB_ID() AND object_id IN (SELECT oid FROM objs)
+    UNION SELECT object_id, sql_handle FROM sys.dm_exec_trigger_stats WHERE database_id = DB_ID() AND object_id IN (SELECT oid FROM objs)
+),
+sp AS (
+    SELECT mh.object_id, qs.plan_handle, MAX(qs.execution_count) AS n, SUM(qs.total_worker_time) AS cpu, SUM(qs.total_logical_reads) AS rd
+    FROM mh JOIN sys.dm_exec_query_stats qs ON qs.sql_handle = mh.sql_handle
+    GROUP BY mh.object_id, qs.plan_handle
+),
 st AS (
-    SELECT t.objectid AS object_id, MAX(qs.execution_count) AS n, SUM(qs.total_worker_time) AS cpu, SUM(qs.total_logical_reads) AS rd
-    FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
-    WHERE t.dbid = DB_ID() AND t.objectid IN (SELECT oid FROM objs)
-    GROUP BY t.objectid
+    SELECT object_id, SUM(n) AS n, SUM(cpu) AS cpu, SUM(rd) AS rd FROM sp GROUP BY object_id
 ),
 cur AS (
     SELECT o.name, m.n, m.cpu, m.rd, m.el, st.n AS sn, st.cpu AS scpu, st.rd AS srd

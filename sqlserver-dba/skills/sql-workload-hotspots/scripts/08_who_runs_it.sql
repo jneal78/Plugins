@@ -26,24 +26,47 @@ DECLARE @QueryHash binary(8)     = NULL,              -- e.g. 0x0123456789ABCDEF
 
 DECLARE @oid int = CASE WHEN @QueryHash IS NULL THEN OBJECT_ID(@Object) END;
 DECLARE @off int = DATEDIFF(MINUTE, GETUTCDATE(), GETDATE());
+-- The object's name as a LIKE pattern: wildcards escaped ('_' is one) and bounded by non-identifier characters, so
+-- usp_Order does not match a batch that calls usp_OrderLines.
+DECLARE @esc nvarchar(400) = REPLACE(REPLACE(REPLACE(OBJECT_NAME(@oid), N'[', N'[[]'), N'_', N'[_]'), N'%', N'[%]');
+DECLARE @nameInside nvarchar(500) = N'%[^A-Za-z0-9_#@$]' + @esc + N'[^A-Za-z0-9_#@$]%',
+        @nameAtStart nvarchar(500) = @esc + N'[^A-Za-z0-9_#@$]%';
 
--- 1. Plan-cache entries (which module or ad hoc batch carries it)
+-- 1. Plan-cache entries (which module or ad hoc batch carries it). A module's entries are found through the
+--    procedure, trigger and function stats (one row per module), not by reading every cached statement's text.
+;WITH mh AS (
+    SELECT sql_handle FROM sys.dm_exec_procedure_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+    UNION SELECT sql_handle FROM sys.dm_exec_trigger_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+    UNION SELECT sql_handle FROM sys.dm_exec_function_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+),
+e AS (   -- the matching cache entries, found by two separate seeks: an OR here makes the text lookup run for every entry
+    SELECT qs.sql_handle, qs.statement_start_offset, qs.creation_time, qs.last_execution_time, qs.execution_count,
+           qs.total_worker_time, qs.query_hash
+    FROM sys.dm_exec_query_stats qs WHERE @QueryHash IS NOT NULL AND qs.query_hash = @QueryHash
+    UNION ALL
+    SELECT qs.sql_handle, qs.statement_start_offset, qs.creation_time, qs.last_execution_time, qs.execution_count,
+           qs.total_worker_time, qs.query_hash
+    FROM sys.dm_exec_query_stats qs WHERE qs.sql_handle IN (SELECT sql_handle FROM mh)
+)
 SELECT TOP (20) CONVERT(varchar(16), qs.creation_time, 120) AS plan_created, CONVERT(varchar(19), qs.last_execution_time, 120) AS last_exec,
        qs.execution_count, CAST(qs.total_worker_time / 1000.0 / qs.execution_count AS decimal(14,2)) AS avg_cpu_ms,
        ISNULL(OBJECT_SCHEMA_NAME(t.objectid, t.dbid) + N'.' + OBJECT_NAME(t.objectid, t.dbid), N'(ad hoc / prepared)') AS module,
        DB_NAME(t.dbid) AS db, CONVERT(varchar(20), qs.query_hash, 1) AS query_hash,
-       LEFT(REPLACE(REPLACE(REPLACE(SUBSTRING(t.text, qs.statement_start_offset / 2 + 1, 400), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 150) AS stmt
-FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
-WHERE (@QueryHash IS NOT NULL AND qs.query_hash = @QueryHash)
-   OR (@oid IS NOT NULL AND t.objectid = @oid AND t.dbid = DB_ID())
+       -- varchar: sqlcmd can fail reading statement text it can't decode ("ReadAndHandleColumnData") and then stall;
+       -- the conversion replaces such characters with '?'
+       CAST(LEFT(REPLACE(REPLACE(REPLACE(SUBSTRING(t.text, qs.statement_start_offset / 2 + 1, 400), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 150) AS varchar(150)) AS stmt
+FROM e qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
 ORDER BY qs.last_execution_time DESC;
 
 -- 2. Sessions whose most recent batch is the statement or object
-;WITH h AS (
-    SELECT DISTINCT qs.sql_handle
-    FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
-    WHERE (@QueryHash IS NOT NULL AND qs.query_hash = @QueryHash)
-       OR (@oid IS NOT NULL AND t.objectid = @oid AND t.dbid = DB_ID())
+;WITH mh AS (
+    SELECT sql_handle FROM sys.dm_exec_procedure_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+    UNION SELECT sql_handle FROM sys.dm_exec_trigger_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+    UNION SELECT sql_handle FROM sys.dm_exec_function_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+),
+h AS (
+    SELECT qs.sql_handle FROM sys.dm_exec_query_stats qs WHERE @QueryHash IS NOT NULL AND qs.query_hash = @QueryHash
+    UNION SELECT sql_handle FROM mh
 ),
 c AS (
     SELECT c.session_id, c.client_net_address, c.net_transport, c.auth_scheme, c.most_recent_sql_handle
@@ -51,7 +74,7 @@ c AS (
     OUTER APPLY sys.dm_exec_sql_text(c.most_recent_sql_handle) t
     WHERE c.session_id <> @@SPID AND (c.most_recent_sql_handle IN (SELECT sql_handle FROM h)
        OR (@oid IS NOT NULL AND t.dbid = DB_ID() AND t.objectid = @oid)
-       OR (@oid IS NOT NULL AND t.text LIKE N'%' + OBJECT_NAME(@oid) + N'%'))
+       OR (@oid IS NOT NULL AND (t.text LIKE @nameInside OR t.text LIKE @nameAtStart)))
 )
 SELECT s.session_id, s.program_name, s.host_name, s.host_process_id, s.login_name, s.nt_user_name,
        s.client_interface_name, s.client_version, c.client_net_address, c.net_transport, c.auth_scheme,
@@ -63,11 +86,14 @@ SELECT s.session_id, s.program_name, s.host_name, s.host_process_id, s.login_nam
 FROM c JOIN sys.dm_exec_sessions s ON s.session_id = c.session_id;
 
 -- 3. Footprint of those applications: every session from the same program / host / login
-;WITH h AS (
-    SELECT DISTINCT qs.sql_handle
-    FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
-    WHERE (@QueryHash IS NOT NULL AND qs.query_hash = @QueryHash)
-       OR (@oid IS NOT NULL AND t.objectid = @oid AND t.dbid = DB_ID())
+;WITH mh AS (
+    SELECT sql_handle FROM sys.dm_exec_procedure_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+    UNION SELECT sql_handle FROM sys.dm_exec_trigger_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+    UNION SELECT sql_handle FROM sys.dm_exec_function_stats WHERE @oid IS NOT NULL AND database_id = DB_ID() AND object_id = @oid
+),
+h AS (
+    SELECT qs.sql_handle FROM sys.dm_exec_query_stats qs WHERE @QueryHash IS NOT NULL AND qs.query_hash = @QueryHash
+    UNION SELECT sql_handle FROM mh
 ),
 src AS (
     SELECT DISTINCT s.program_name, s.host_name, s.login_name
@@ -76,7 +102,7 @@ src AS (
     OUTER APPLY sys.dm_exec_sql_text(c.most_recent_sql_handle) t
     WHERE c.session_id <> @@SPID AND (c.most_recent_sql_handle IN (SELECT sql_handle FROM h)
        OR (@oid IS NOT NULL AND t.dbid = DB_ID() AND t.objectid = @oid)
-       OR (@oid IS NOT NULL AND t.text LIKE N'%' + OBJECT_NAME(@oid) + N'%'))
+       OR (@oid IS NOT NULL AND (t.text LIKE @nameInside OR t.text LIKE @nameAtStart)))
 )
 SELECT ISNULL(s.program_name, N'') AS program_name, s.host_name, s.login_name, COUNT(*) AS sessions,
        SUM(CASE WHEN s.status = 'sleeping' THEN 1 ELSE 0 END) AS sleeping,

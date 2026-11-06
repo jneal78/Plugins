@@ -28,10 +28,10 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $prefix = if ((Split-Path $Script -Leaf) -like '15*') { 'graphs_ring_' } else { 'graphs_file_' }
 
 for ($i = 1; $i -le $Runs; $i++) {
-    $out = Join-Path $OutDir ($prefix + (Get-Date -Format 'yyyyMMdd_HHmm') + '.json')
+    $out = Join-Path $OutDir ($prefix + (Get-Date).ToString('yyyyMMdd_HHmm', [Globalization.CultureInfo]::InvariantCulture) + '.json')
     & sqlcmd -S $Server -d master -E -I -X -y 0 -f 65001 -t $TimeoutSeconds -i $Script -o $out
     $code = $LASTEXITCODE
     $n = if (Test-Path $out) { ([regex]::Matches([IO.File]::ReadAllText($out), '"graph"')).Count } else { 0 }
-    Write-Output ('{0:yyyy-MM-dd HH:mm} run {1}/{2}: exit {3}, {4} graphs held by the session' -f (Get-Date), $i, $Runs, $code, $n)
+    Write-Output ([string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:yyyy-MM-dd HH:mm} run {1}/{2}: exit {3}, {4} graphs held by the session', (Get-Date), $i, $Runs, $code, $n))
     if ($i -lt $Runs) { Start-Sleep -Seconds ([int]($EveryHours * 3600)) }
 }

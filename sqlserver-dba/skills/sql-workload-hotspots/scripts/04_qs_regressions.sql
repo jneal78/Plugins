@@ -63,27 +63,38 @@ SELECT CONVERT(varchar(16), @BeforeFrom, 120) AS before_from, CONVERT(varchar(16
        ISNULL(@TimeZone, N'server offset now') AS time_zone,
        ISNULL(@Schema, N'(all)') AS scope_schema, ISNULL(@ObjectLike, N'(all)') AS scope_object;
 
+-- Every section aggregates the runtime stats per statement and window FIRST (a few thousand rows), then looks up
+-- names, then folds objects that were dropped and recreated through a name map built once and hash-joined.
+-- Resolving names per runtime-stats row, or filtering the map by those rows, took minutes on a busy server.
+
 -- 1. Statement-level aggregates for both windows (scoped), then: regressions
-;WITH live AS (
-    SELECT q.query_hash, MIN(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id)) AS obj
-    FROM sys.query_store_query q
-    WHERE q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NOT NULL
-    GROUP BY q.query_hash
-),
-r AS (
-    SELECT q.query_hash, q.query_id, q.query_text_id,
-           CASE WHEN q.object_id = 0 THEN N'(ad hoc)'
-                ELSE COALESCE(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id), lv.obj,
-                              N'(dropped id ' + CAST(q.object_id AS nvarchar(12)) + N')') END AS obj,
-           CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
-           rs.execution_type, rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
-           rs.avg_logical_io_reads * rs.count_executions AS reads, rs.avg_duration * rs.count_executions AS dur_us, rs.max_dop, rs.plan_id
+;WITH agg AS (
+    SELECT p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
+           SUM(rs.count_executions) AS execs, SUM(rs.avg_cpu_time * rs.count_executions) AS cpu_us,
+           SUM(rs.avg_logical_io_reads * rs.count_executions) AS reads, SUM(rs.avg_duration * rs.count_executions) AS dur_us,
+           MAX(rs.max_dop) AS max_dop, COUNT(DISTINCT rs.plan_id) AS plans,
+           SUM(CASE WHEN rs.execution_type IN (3, 4) THEN rs.count_executions ELSE 0 END) AS failed
     FROM sys.query_store_runtime_stats rs
     JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
     JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
-    JOIN sys.query_store_query q ON q.query_id = p.query_id
-    LEFT JOIN live lv ON lv.query_hash = q.query_hash AND q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NULL
     WHERE ((i.start_time >= @a0 AND i.start_time < @a1) OR (i.start_time >= @b0 AND i.start_time < @b1))
+    GROUP BY p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END
+),
+named AS (
+    SELECT a.*, q.query_hash, q.query_text_id, q.object_id,
+           CASE WHEN q.object_id = 0 THEN NULL ELSE OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id) END AS live_name
+    FROM agg a JOIN sys.query_store_query q ON q.query_id = a.query_id
+),
+fold AS (
+    SELECT q2.query_hash, MIN(OBJECT_SCHEMA_NAME(q2.object_id) + N'.' + OBJECT_NAME(q2.object_id)) AS obj
+    FROM sys.query_store_query q2
+    WHERE q2.object_id <> 0 AND OBJECT_NAME(q2.object_id) IS NOT NULL
+    GROUP BY q2.query_hash
+),
+r AS (
+    SELECT n.*, CASE WHEN n.object_id = 0 THEN N'(ad hoc)'
+                     ELSE COALESCE(n.live_name, fo.obj, N'(dropped id ' + CAST(n.object_id AS nvarchar(12)) + N')') END AS obj
+    FROM named n LEFT HASH JOIN fold fo ON fo.query_hash = n.query_hash AND n.live_name IS NULL AND n.object_id <> 0
 ),
 f AS (
     SELECT * FROM r
@@ -93,8 +104,7 @@ f AS (
 s AS (
     SELECT query_hash, win, MAX(obj) AS obj, MAX(query_id) AS query_id, MAX(query_text_id) AS query_text_id,
            SUM(execs) AS execs, SUM(cpu_us) AS cpu_us, SUM(reads) AS reads, SUM(dur_us) AS dur_us,
-           MAX(max_dop) AS max_dop, COUNT(DISTINCT plan_id) AS plans,
-           SUM(CASE WHEN execution_type IN (3, 4) THEN execs ELSE 0 END) AS failed
+           MAX(max_dop) AS max_dop, SUM(plans) AS plans, SUM(failed) AS failed
     FROM f GROUP BY query_hash, win
 )
 SELECT TOP (@TopN) a.obj, a.query_id, CONVERT(varchar(20), a.query_hash, 1) AS query_hash,
@@ -113,26 +123,31 @@ WHERE a.execs >= @MinExecs AND b.execs > 0
 ORDER BY (a.cpu_us / a.execs - b.cpu_us / b.execs) * (a.execs / @ah) DESC;
 
 -- 2. NEW statements (after only), by CPU per hour; and 3. GONE statements (before only)
-;WITH live AS (
-    SELECT q.query_hash, MIN(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id)) AS obj
-    FROM sys.query_store_query q
-    WHERE q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NOT NULL
-    GROUP BY q.query_hash
-),
-r AS (
-    SELECT q.query_hash, q.query_id, q.query_text_id,
-           CASE WHEN q.object_id = 0 THEN N'(ad hoc)'
-                ELSE COALESCE(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id), lv.obj,
-                              N'(dropped id ' + CAST(q.object_id AS nvarchar(12)) + N')') END AS obj,
-           CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
-           rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
-           rs.avg_logical_io_reads * rs.count_executions AS reads, rs.max_dop
+;WITH agg AS (
+    SELECT p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
+           SUM(rs.count_executions) AS execs, SUM(rs.avg_cpu_time * rs.count_executions) AS cpu_us,
+           SUM(rs.avg_logical_io_reads * rs.count_executions) AS reads, MAX(rs.max_dop) AS max_dop
     FROM sys.query_store_runtime_stats rs
     JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
     JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
-    JOIN sys.query_store_query q ON q.query_id = p.query_id
-    LEFT JOIN live lv ON lv.query_hash = q.query_hash AND q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NULL
     WHERE ((i.start_time >= @a0 AND i.start_time < @a1) OR (i.start_time >= @b0 AND i.start_time < @b1))
+    GROUP BY p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END
+),
+named AS (
+    SELECT a.*, q.query_hash, q.query_text_id, q.object_id,
+           CASE WHEN q.object_id = 0 THEN NULL ELSE OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id) END AS live_name
+    FROM agg a JOIN sys.query_store_query q ON q.query_id = a.query_id
+),
+fold AS (
+    SELECT q2.query_hash, MIN(OBJECT_SCHEMA_NAME(q2.object_id) + N'.' + OBJECT_NAME(q2.object_id)) AS obj
+    FROM sys.query_store_query q2
+    WHERE q2.object_id <> 0 AND OBJECT_NAME(q2.object_id) IS NOT NULL
+    GROUP BY q2.query_hash
+),
+r AS (
+    SELECT n.*, CASE WHEN n.object_id = 0 THEN N'(ad hoc)'
+                     ELSE COALESCE(n.live_name, fo.obj, N'(dropped id ' + CAST(n.object_id AS nvarchar(12)) + N')') END AS obj
+    FROM named n LEFT HASH JOIN fold fo ON fo.query_hash = n.query_hash AND n.live_name IS NULL AND n.object_id <> 0
 ),
 f AS (
     SELECT * FROM r
@@ -165,25 +180,32 @@ FROM k JOIN sys.query_store_query_text t ON t.query_text_id = k.query_text_id
 ORDER BY k.kind DESC, k.cpu_min_hr DESC;
 
 -- 4. Per object: hourly rates before vs after (dropped ids folded to the live name where a statement matches)
-;WITH live AS (
-    SELECT q.query_hash, MIN(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id)) AS obj
-    FROM sys.query_store_query q
-    WHERE q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NOT NULL
-    GROUP BY q.query_hash
-),
-r AS (
-    SELECT CASE WHEN q.object_id = 0 THEN N'(ad hoc, all)'
-                ELSE COALESCE(OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id), lv.obj,
-                              N'(dropped id ' + CAST(q.object_id AS nvarchar(12)) + N')') END AS obj,
-           CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
-           rs.execution_type, rs.count_executions AS execs, rs.avg_cpu_time * rs.count_executions AS cpu_us,
-           rs.avg_logical_io_reads * rs.count_executions AS reads
+;WITH agg AS (
+    SELECT p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END AS win,
+           SUM(rs.count_executions) AS execs, SUM(rs.avg_cpu_time * rs.count_executions) AS cpu_us,
+           SUM(rs.avg_logical_io_reads * rs.count_executions) AS reads,
+           SUM(CASE WHEN rs.execution_type IN (3, 4) THEN rs.count_executions ELSE 0 END) AS failed
     FROM sys.query_store_runtime_stats rs
     JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
     JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
-    JOIN sys.query_store_query q ON q.query_id = p.query_id
-    LEFT JOIN live lv ON lv.query_hash = q.query_hash AND q.object_id <> 0 AND OBJECT_NAME(q.object_id) IS NULL
     WHERE ((i.start_time >= @a0 AND i.start_time < @a1) OR (i.start_time >= @b0 AND i.start_time < @b1))
+    GROUP BY p.query_id, CASE WHEN i.start_time >= @a0 AND i.start_time < @a1 THEN 'A' ELSE 'B' END
+),
+named AS (
+    SELECT a.*, q.query_hash, q.object_id,
+           CASE WHEN q.object_id = 0 THEN NULL ELSE OBJECT_SCHEMA_NAME(q.object_id) + N'.' + OBJECT_NAME(q.object_id) END AS live_name
+    FROM agg a JOIN sys.query_store_query q ON q.query_id = a.query_id
+),
+fold AS (
+    SELECT q2.query_hash, MIN(OBJECT_SCHEMA_NAME(q2.object_id) + N'.' + OBJECT_NAME(q2.object_id)) AS obj
+    FROM sys.query_store_query q2
+    WHERE q2.object_id <> 0 AND OBJECT_NAME(q2.object_id) IS NOT NULL
+    GROUP BY q2.query_hash
+),
+r AS (
+    SELECT n.*, CASE WHEN n.object_id = 0 THEN N'(ad hoc, all)'
+                     ELSE COALESCE(n.live_name, fo.obj, N'(dropped id ' + CAST(n.object_id AS nvarchar(12)) + N')') END AS obj
+    FROM named n LEFT HASH JOIN fold fo ON fo.query_hash = n.query_hash AND n.live_name IS NULL AND n.object_id <> 0
 ),
 f AS (
     SELECT * FROM r
@@ -197,8 +219,8 @@ SELECT TOP (@TopN) obj,
        CAST(SUM(CASE WHEN win = 'A' THEN reads END) / 1e6 / @ah AS decimal(12,2)) AS reads_m_hr_after,
        CAST(SUM(CASE WHEN win = 'B' THEN execs END) / @bh AS bigint) AS stmt_execs_hr_before,
        CAST(SUM(CASE WHEN win = 'A' THEN execs END) / @ah AS bigint) AS stmt_execs_hr_after,
-       SUM(CASE WHEN win = 'B' AND execution_type IN (3, 4) THEN execs ELSE 0 END) AS failed_before,
-       SUM(CASE WHEN win = 'A' AND execution_type IN (3, 4) THEN execs ELSE 0 END) AS failed_after
+       SUM(CASE WHEN win = 'B' THEN failed ELSE 0 END) AS failed_before,
+       SUM(CASE WHEN win = 'A' THEN failed ELSE 0 END) AS failed_after
 FROM f
 GROUP BY obj
 ORDER BY ABS(ISNULL(SUM(CASE WHEN win = 'A' THEN cpu_us END) / @ah, 0) - ISNULL(SUM(CASE WHEN win = 'B' THEN cpu_us END) / @bh, 0)) DESC;

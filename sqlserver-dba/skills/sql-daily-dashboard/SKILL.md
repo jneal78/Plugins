@@ -31,7 +31,7 @@ When it's done, summarize the verdict and the top of "Look first at" in a few li
 Every object has a drill-down (`#drill=<db>|<object>`) with a **request to paste to Claude**: object, windows, numbers, signals and top query_ids. Start from that request:
 - a costly or worsening object → **sql-query-tuning** (or **sql-workload-hotspots** to see what else changed around it);
 - timeouts or errors → **sql-workload-hotspots** steps 5–6;
-- a business metric falling while its CPU is normal → **sql-client-path-profiler**.
+- a business metric falling while its CPU is normal → **sql-client-path-profiler** (planned, not in the plugin yet; until then, say the database looks fine for that process and that the client or host needs measuring).
 
 ## The work board and the ledger
 

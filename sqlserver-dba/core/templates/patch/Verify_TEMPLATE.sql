@@ -6,6 +6,7 @@
       - section 2: the target statement drops from <before per exec> to <after per exec>;
       - section 3: per hour, "after" rows show the lower cost at the same execution rate;
       - section 4: no new errors or timeouts.
+    Section 1b: every index the patch's hints rely on is 'present'.
     After a vendor upgrade: 'original' = the upgrade restored the slow version (re-apply);
     'CHANGED' = the vendor shipped a new definition (check it for the fix, or rebuild the patch from it).
 */
@@ -15,6 +16,7 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 DECLARE @Object       nvarchar(300) = N'<schema>.<object>',
         @Marker       nvarchar(100) = N'<MARKER>',
         @OriginalHash varchar(66)   = '<0x... original>',
+        @RequiredIndexes nvarchar(max) = N'',   -- indexes the patch's hints rely on, 'schema.table.index;...'
         @TopN         int           = 8;
 -------------------------------------------------------------------------------------------------------------
 DECLARE @id int = OBJECT_ID(@Object);
@@ -31,16 +33,32 @@ SELECT o.name, CONVERT(varchar(16), o.modify_date, 120) AS modified_local,
 FROM sys.objects o JOIN sys.sql_modules m ON m.object_id = o.object_id
 WHERE o.object_id = @id;
 
--- 2. Plan cache per statement since the object was last compiled
+-- 1b. Indexes the patch's hints rely on. An upgrade that renames or drops one while keeping the patched object makes
+--     every call fail (FORCESEEK without a usable index: error 8622; INDEX() on a missing index: error 308).
+DECLARE @ix xml = CAST(N'<i>' + REPLACE(@RequiredIndexes, N';', N'</i><i>') + N'</i>' AS xml);
+SELECT v.name AS required_index,
+       CASE WHEN EXISTS (SELECT 1 FROM sys.indexes i
+                         WHERE i.object_id = OBJECT_ID(PARSENAME(v.name, 3) + N'.' + PARSENAME(v.name, 2)) AND i.name = PARSENAME(v.name, 1))
+            THEN 'present' ELSE 'MISSING - the patched statement will fail' END AS state
+FROM (SELECT LTRIM(RTRIM(n.value('.', 'nvarchar(400)'))) AS name FROM @ix.nodes('i') x(n)) v
+WHERE v.name <> N'';
+
+-- 2. Plan cache per statement since the object was last compiled. The object's cached batches come from the per-module
+--    stats, so the text lookup runs for its own entries only, not for every entry in the plan cache.
+;WITH mh AS (
+    SELECT sql_handle FROM sys.dm_exec_procedure_stats WHERE database_id = DB_ID() AND object_id = @id
+    UNION SELECT sql_handle FROM sys.dm_exec_function_stats WHERE database_id = DB_ID() AND object_id = @id
+    UNION SELECT sql_handle FROM sys.dm_exec_trigger_stats WHERE database_id = DB_ID() AND object_id = @id
+)
 SELECT TOP (@TopN) qs.statement_start_offset AS stmt_offset,
-       LEFT(REPLACE(REPLACE(REPLACE(SUBSTRING(t.text, qs.statement_start_offset / 2 + 1, 200), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 90) AS stmt,
+       CAST(LEFT(REPLACE(REPLACE(REPLACE(SUBSTRING(t.text, qs.statement_start_offset / 2 + 1, 200), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 90) AS varchar(90)) AS stmt,
        CONVERT(varchar(16), qs.creation_time, 120) AS compiled, qs.execution_count AS execs,
        CAST(qs.total_worker_time / 1000.0 / qs.execution_count AS decimal(12, 1)) AS avg_cpu_ms,
        CAST(qs.total_elapsed_time / 1000.0 / qs.execution_count AS decimal(12, 1)) AS avg_ms,
        qs.total_logical_reads / qs.execution_count AS avg_reads, qs.last_dop,
        CAST(qs.total_worker_time / 60000000.0 AS decimal(12, 2)) AS total_cpu_min
 FROM sys.dm_exec_query_stats qs CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) t
-WHERE t.dbid = DB_ID() AND t.objectid = @id
+WHERE qs.sql_handle IN (SELECT sql_handle FROM mh)
 ORDER BY qs.total_worker_time DESC;
 
 -- 3. Query Store per local hour, from a day before the change: the object's costliest statements by query_hash

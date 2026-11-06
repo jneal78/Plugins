@@ -42,14 +42,16 @@ The plugin holds nothing about your organization. Your servers, policies, baseli
 Give Claude's login:
 - `VIEW SERVER STATE` and `VIEW DATABASE STATE` (SQL Server 2022: `VIEW SERVER PERFORMANCE STATE`);
 - `VIEW DEFINITION` where code fingerprints are wanted;
+- `SHOWPLAN` in the databases where estimated plans are read (`SET SHOWPLAN_XML ON`);
+- read access to `msdb` (`SQLAgentReaderRole`) only if Agent jobs should be named in deadlock and release work (deadlock script 18);
 - `db_datareader` only where business-table metrics are needed.
 
 **Strongly recommended:** a Claude Code hook that blocks write keywords in any command naming a production server. The bundled scripts are written to pass one. A portable hook ships here in a later release.
 
 ## Requirements
 
-- SQL Server 2016 or later with Query Store on (2019/2022 give the best data). Azure SQL Managed Instance mostly works; Azure SQL Database is not supported yet.
-- `sqlcmd` (or SSMS) on the machine running Claude, and PowerShell 7 for the dashboard and tools.
+- SQL Server 2017 or later with Query Store on (2019/2022 give the best data). Several scripts read `sys.query_store_wait_stats` or use `STRING_AGG`, which 2016 doesn't have, and `sys.dm_db_log_stats` needs 2016 SP2+. Azure SQL Managed Instance mostly works; Azure SQL Database is not supported yet.
+- Windows first: `sqlcmd` (ODBC sqlcmd 15+ or SSMS's) with integrated authentication (`-E`), PowerShell 7 for the dashboard and tools (the deadlock collector also runs in Windows PowerShell 5.1), and Git Bash's `awk` and `tr` for the health check's live-rate summary. Other platforms need equivalent commands.
 - For PDFs: Edge or Chrome, and internet access to jsDelivr for the markdown and mermaid scripts.
 
 ## Contributing

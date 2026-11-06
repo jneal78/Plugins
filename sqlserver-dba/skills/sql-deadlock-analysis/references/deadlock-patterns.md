@@ -103,12 +103,13 @@ Script numbers refer to this plugin: 13–18 are in this skill, 03/04/08/09 in s
 - **Owner:** DBA, with a vendor note.
 - **Seen:** an outbound message queue. Each removal scanned 114 pages; with the index it reads 2 pages, and the deadlocks stopped.
 
-## D7. Serializable range locks (`range`)
+## D7. Serializable range locks (`range`, `range-hint`)
 
 - **Signature:** `RangeS-S`, `RangeS-U`, `RangeI-N` or `RangeX-X` modes; isolation `serializable`. It can happen on a table with **no rows**.
 - **Root cause:** the session runs at serializable, so every read locks the range it examined, including the gap at the end of an empty index. Concurrent inserts into that range then cross. The database code rarely asks for this. The client does: .NET `TransactionScope` defaults to serializable, and some frameworks and ODBC settings do too.
 - **Upstream:** the program in the graph, its framework and its connection settings.
-- **Evidence:** the isolation level in the graph for every side that holds range locks; the procedures don't contain `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` (check the definition); an empty or tiny table scanned by a trigger or existence check.
+- **Not always the client:** range locks also appear at read committed when the code asks for them: `HOLDLOCK` or `SERIALIZABLE` table hints (including the `UPDLOCK, HOLDLOCK` that D1–D3 fixes add), `MERGE … WITH (HOLDLOCK)`, cascading foreign keys and indexed-view maintenance. The analyzer tags those `range-hint`; their owner is the code, so don't send them to the client's vendor.
+- **Evidence:** the isolation level in the graph for every side that holds range locks (serializable → `range`, the client; read committed → `range-hint`, the code); the procedures don't contain `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` or range hints at the graph's line (check the definition); cascades in 17 §5; an empty or tiny table scanned by a trigger or existence check.
 - **Fix:** at the source, so the client uses read committed (`TransactionScope` with explicit `IsolationLevel.ReadCommitted`), or snapshot. A local guard can help: an `IF EXISTS` with a seekable predicate, or skipping the check when the table is empty (fix catalog §18). This is usually vendor code: write it up rather than patch it.
 - **Owner:** the client application's vendor.
 - **Seen:** a vendor client at serializable, whose triggers and deletes checked an empty child table. The scan took a range lock on the end of the index, which every concurrent writer then needed. Filed with the vendor; no local patch.

@@ -23,14 +23,20 @@ $browser = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $browser) { throw 'Edge or Chrome not found' }
 
-$url = 'file:///' + ($Html -replace '\\', '/')
-$common = @('--headless=new', '--disable-gpu', "--virtual-time-budget=$BudgetMs")
+# A proper file URI (spaces and '#' percent-encoded), and every argument quoted: Start-Process joins its argument list
+# with spaces, so a path with a space would otherwise split into two arguments.
+$url = ([Uri]$Html).AbsoluteUri
+$common = "--headless=new --disable-gpu --virtual-time-budget=$BudgetMs"
+function Q([string]$s) { '"' + $s + '"' }
 
-Start-Process $browser -ArgumentList ($common + @('--no-pdf-header-footer', "--print-to-pdf=$Pdf", $url)) -Wait
+$started = Get-Date
+Start-Process $browser -ArgumentList "$common --no-pdf-header-footer $(Q "--print-to-pdf=$Pdf") $(Q $url)" -Wait
+# The browser reports nothing on failure: check that the PDF exists and was written by this run, not an older one.
+if (-not (Test-Path $Pdf) -or (Get-Item $Pdf).LastWriteTime -lt $started.AddSeconds(-2)) { throw "No new PDF was written: $Pdf" }
 "PDF: $Pdf ($([math]::Round((Get-Item $Pdf).Length / 1KB)) KB)"
 
 if ($Screenshot) {
     $png = [IO.Path]::ChangeExtension($Html, '.png')
-    Start-Process $browser -ArgumentList ($common + @('--window-size=1100,1800', "--screenshot=$png", $url)) -Wait
+    Start-Process $browser -ArgumentList "$common --window-size=1100,1800 $(Q "--screenshot=$png") $(Q $url)" -Wait
     "Screenshot: $png"
 }

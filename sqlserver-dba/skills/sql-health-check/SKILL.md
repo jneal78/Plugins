@@ -1,6 +1,6 @@
 ---
 name: sql-health-check
-description: Read-only SQL Server health check. Covers CPU, memory, disk space and I/O latency, worker threads, waits, compiles, blocking, deadlocks, the availability group, tempdb and Query Store, takes a 60-second sample of live rates, compares today's workload with the same hours a week ago and with a baseline day, then gives a verdict and ranks the savings still available, optionally as a shareable PDF. Use this whenever someone asks how the SQL Server or "the database server" is doing, whether anything is wrong right now, for a health check, a CPU / disk / I/O / memory check, a before-and-after or week-over-week comparison, "where is the CPU going" at server level, or a server report to share, even if they don't say "health check".
+description: Read-only SQL Server health check. Covers CPU, memory, disk space and I/O latency, worker threads, waits, compiles, blocking, deadlocks, the availability group, tempdb and Query Store, takes a 60-second sample of live rates, compares today's workload with the same hours a week ago and with a baseline day, then gives a verdict and ranks the savings still available, optionally as a shareable PDF. Use this whenever someone asks how the SQL Server or "the database server" is doing, whether anything is wrong right now, for a health check, a CPU / disk / I/O / memory check, how today compares with last week overall, or a server report to share, even if they don't say "health check". Which objects or integrations use the CPU, and what changed in them, is sql-workload-hotspots.
 ---
 
 # SQL Server health check
@@ -56,7 +56,7 @@ Both variables are required by sqlcmd:
 - Savings: CPU-minutes in the window scaled to a business day, hedged ("≈ 90 CPU-min/day"). Say which figures are vendor claims.
 - `core/number-hygiene.md` before publishing.
 
-When a candidate needs more than a line, hand it on: one object → **sql-query-tuning**; "what changed" across many → **sql-workload-hotspots**; deadlocks → **sql-deadlock-analysis**; a slow business process on a healthy server → **sql-client-path-profiler**.
+When a candidate needs more than a line, hand it on: one object → **sql-query-tuning**; "what changed" across many → **sql-workload-hotspots**; deadlocks → **sql-deadlock-analysis**; a slow business process on a healthy server → **sql-client-path-profiler** (planned, not in the plugin yet; until then, report that the server is not the bottleneck and measure the process from its business table).
 
 ## 5. Report
 

@@ -11,7 +11,9 @@
               the application (or sendStringParametersAsUnicode=false), not a database change.
               'Seek Plan' rows matter; 'Cardinality Estimate' rows from a CONVERT in the select list are usually
               harmless. The plan cache only covers what is cached now: run it at a busy time.
-              Section 2 repeats the search over Query Store plans, which survive restarts and recompiles.
+              Section 1 inspects this database's statements among the 4 x @TopStatements most expensive cached
+              statements server-wide; section 2 the @TopStatements Query Store plans with the most CPU in the
+              look-back. Both pick their candidates before reading any plan XML, which is the costly part.
     Run     : sqlcmd -S <server> -d <db> -E -I -W -s"|" -i 10_implicit_conversions.sql
 */
 SET NOCOUNT ON;
@@ -25,13 +27,18 @@ DECLARE @TopStatements int = 500,   -- most expensive cached statements to inspe
 
 -- 1. Plan cache: statements in this database with plan-affecting conversions, by CPU
 ;WITH XMLNAMESPACES (DEFAULT 'http://schemas.microsoft.com/sqlserver/2004/07/showplan'),
-top_stmts AS (
-    SELECT TOP (@TopStatements) qs.plan_handle, qs.sql_handle, qs.statement_start_offset, qs.statement_end_offset,
+top_cpu AS (   -- the most expensive cached statements server-wide first: a sort of the DMV, no function per entry
+    SELECT TOP (@TopStatements * 4) qs.plan_handle, qs.sql_handle, qs.statement_start_offset, qs.statement_end_offset,
            qs.execution_count, qs.total_worker_time, qs.total_logical_reads, qs.query_hash
     FROM sys.dm_exec_query_stats qs
-    CROSS APPLY sys.dm_exec_plan_attributes(qs.plan_handle) pa
-    WHERE pa.attribute = N'dbid' AND CAST(pa.value AS int) = DB_ID()
     ORDER BY qs.total_worker_time DESC
+),
+top_stmts AS (   -- then this database's among them (plan attributes read for those entries only)
+    SELECT TOP (@TopStatements) t.*
+    FROM top_cpu t
+    CROSS APPLY sys.dm_exec_plan_attributes(t.plan_handle) pa
+    WHERE pa.attribute = N'dbid' AND CAST(pa.value AS int) = DB_ID()
+    ORDER BY t.total_worker_time DESC
 ),
 p AS (
     SELECT s.*, TRY_CAST(tp.query_plan AS xml) AS x
@@ -63,11 +70,13 @@ used AS (
     WHERE i.start_time >= DATEADD(DAY, -@QsDays, GETUTCDATE())
     GROUP BY rs.plan_id
 ),
+top_used AS (   -- the TOP is a barrier: the text search below can't be pushed down to every stored plan
+    SELECT TOP (@TopStatements) plan_id, execs, cpu_us FROM used ORDER BY cpu_us DESC
+),
 p AS (
-    SELECT TOP (@TopStatements) p.plan_id, p.query_id, u.execs, u.cpu_us, TRY_CAST(p.query_plan AS xml) AS x
-    FROM sys.query_store_plan p JOIN used u ON u.plan_id = p.plan_id
+    SELECT p.plan_id, p.query_id, u.execs, u.cpu_us, TRY_CAST(p.query_plan AS xml) AS x
+    FROM top_used u JOIN sys.query_store_plan p ON p.plan_id = u.plan_id
     WHERE p.query_plan LIKE N'%PlanAffectingConvert%ConvertIssue="Seek Plan"%'
-    ORDER BY u.cpu_us DESC
 ),
 w AS (
     SELECT p.plan_id, p.query_id, p.execs, p.cpu_us, c.n.value('@Expression', 'nvarchar(400)') AS expression

@@ -45,14 +45,15 @@ SET LOCK_TIMEOUT 5000
                                                  (sys.dm_exec_requests CROSS APPLY dm_exec_sql_text: objectid = @obj)
   a plan guide is scoped to it                -> review first
   it is signed (sys.crypt_properties)         -> ALTER would drop the signature
-  ANSI_NULLS / QUOTED_IDENTIFIER OFF          -> set STEP 1 to match first
+  ANSI_NULLS / QUOTED_IDENTIFIER of the original differ from STEP 1   -> set STEP 1 to match first
   a trigger with first/last firing order      -> ALTER drops it; add sp_settriggerorder to STEP 2
+  an index the patch's hints rely on is missing -> the patched statement would fail (8622 / 308)
   print server, DB, login, time, current hash, and the grants before
--- STEP 1: SET ANSI_NULLS / QUOTED_IDENTIFIER as the original; ALTER (the patched text)
+-- STEP 1: SET ANSI_NULLS / QUOTED_IDENTIFIER as the original; ALTER PROCEDURE / FUNCTION / TRIGGER (the patched text)
 -- STEP 2: print version (PATCHED / as built hash), SET options, grants after (ALTER keeps grants; show them anyway)
 ```
 
-Why each guard exists: a hash check prevents overwriting a vendor change you haven't seen; "running now" avoids a schema lock wait on a hot procedure; the signature and plan-guide checks catch side effects of `ALTER` that nobody remembers.
+Why each guard exists: a hash check prevents overwriting a vendor change you haven't seen; "running now" avoids a schema lock wait on a hot procedure (it sees only the innermost module of each request, so check callers too); the signature and plan-guide checks catch side effects of `ALTER` that nobody remembers; the index check exists because an in-code hint fails loudly where a forced plan fails quietly. `FORCESEEK` with no usable index raises error 8622 and `INDEX(name)` on a missing index error 308, on every call, so the Verify script checks the same indexes after every upgrade.
 
 **Deploy window:** for a scheduled procedure, list when it runs and how long it takes and name a gap. For a hot procedure, deploy at low traffic; `ALTER` waits for a schema lock, hence `LOCK_TIMEOUT`.
 

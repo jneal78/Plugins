@@ -43,7 +43,7 @@ Estimated plan for a statement you can run as a SELECT: `SET SHOWPLAN_XML ON` th
 - Housekeeping tables that only grow (tracking, queue, log, "pending" tables) explain costs that rise a little every day.
 - The business rhythm: when does it run (every 15 minutes? per driver refresh? per screen open?), and who calls it (script 08).
 
-## 5. Design the fix (see fix-patterns.md)
+## 5. Design the fix (see `core/fix-catalog.md`)
 
 - Prefer the smallest change that removes the bad operator and keeps the SELECT list, joins and predicates identical, so the output can't change.
 - Try 2–4 variants as read-only SELECTs and keep a table of each one's CPU, reads and row parity. Rejected variants and why are useful in the write-up: they show the vendor what doesn't work.

@@ -97,21 +97,28 @@ SELECT TOP (30) g.obj, CAST(g.cpuC / 60e6 AS decimal(9,1)) AS cpu_min_c, CAST(10
        g.nC AS stmt_execs_c, CAST(g.cpuC / 1000.0 / NULLIF(g.nC, 0) AS decimal(12,2)) AS cpu_ms_per_stmt, CAST(g.readsC / NULLIF(g.nC, 0) AS bigint) AS reads_per_stmt, g.timeoutsC AS timeouts_c
 FROM g CROSS JOIN t WHERE g.cpuC IS NOT NULL ORDER BY g.cpuC DESC;
 
--- 5. Biggest movers vs a week ago (statement level, at least 5 CPU-min either day): regressions and wins
-WITH r AS (
-  SELECT CASE WHEN i.start_time >= @cSo AND i.start_time < @cEo THEN 'C' ELSE 'A' END AS win, q.query_id, q.object_id,
-         rs.count_executions AS n, rs.avg_cpu_time * rs.count_executions AS cpu
+-- 5. Biggest movers vs a week ago (statement level, at least 5 CPU-min either day): regressions and wins.
+--    Statements are matched by query_hash, so one whose procedure was dropped and recreated (new query_id) is one row,
+--    not a big "regression" plus a big "win". Runtime stats are aggregated per query first, names looked up after.
+WITH agg AS (
+  SELECT p.query_id, CASE WHEN i.start_time >= @cSo AND i.start_time < @cEo THEN 'C' ELSE 'A' END AS win,
+         SUM(rs.count_executions) AS n, SUM(rs.avg_cpu_time * rs.count_executions) AS cpu
   FROM sys.query_store_runtime_stats rs JOIN sys.query_store_runtime_stats_interval i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
-  JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id JOIN sys.query_store_query q ON q.query_id = p.query_id
+  JOIN sys.query_store_plan p ON p.plan_id = rs.plan_id
   WHERE (i.start_time >= @cSo AND i.start_time < @cEo) OR (i.start_time >= @aSo AND i.start_time < @aEo)
+  GROUP BY p.query_id, CASE WHEN i.start_time >= @cSo AND i.start_time < @cEo THEN 'C' ELSE 'A' END
 ), s AS (
-  SELECT query_id, MAX(object_id) AS object_id, SUM(CASE WHEN win = 'A' THEN cpu ELSE 0 END) AS cpuA, SUM(CASE WHEN win = 'C' THEN cpu ELSE 0 END) AS cpuC,
-         SUM(CASE WHEN win = 'A' THEN n ELSE 0 END) AS nA, SUM(CASE WHEN win = 'C' THEN n ELSE 0 END) AS nC
-  FROM r GROUP BY query_id
+  SELECT q.query_hash, MAX(a.query_id) AS query_id, MAX(q.object_id) AS object_id, MAX(q.query_text_id) AS query_text_id,
+         SUM(CASE WHEN a.win = 'A' THEN a.cpu ELSE 0 END) AS cpuA, SUM(CASE WHEN a.win = 'C' THEN a.cpu ELSE 0 END) AS cpuC,
+         SUM(CASE WHEN a.win = 'A' THEN a.n ELSE 0 END) AS nA, SUM(CASE WHEN a.win = 'C' THEN a.n ELSE 0 END) AS nC
+  FROM agg a JOIN sys.query_store_query q ON q.query_id = a.query_id
+  GROUP BY q.query_hash
 )
-SELECT TOP (15) s.query_id, ISNULL(OBJECT_NAME(s.object_id), 'adhoc') AS obj, CAST(s.cpuA / 60e6 AS decimal(9,1)) AS cpu_min_a, CAST(s.cpuC / 60e6 AS decimal(9,1)) AS cpu_min_c,
+SELECT TOP (15) s.query_id, CONVERT(varchar(20), s.query_hash, 1) AS query_hash,
+       CASE WHEN s.object_id = 0 THEN 'adhoc' ELSE ISNULL(OBJECT_NAME(s.object_id), CONCAT('(old object id ', s.object_id, ')')) END AS obj,
+       CAST(s.cpuA / 60e6 AS decimal(9,1)) AS cpu_min_a, CAST(s.cpuC / 60e6 AS decimal(9,1)) AS cpu_min_c,
        CAST(s.cpuA / 1000.0 / NULLIF(s.nA, 0) AS decimal(12,1)) AS ms_a, CAST(s.cpuC / 1000.0 / NULLIF(s.nC, 0) AS decimal(12,1)) AS ms_c, s.nA, s.nC,
        LEFT(REPLACE(REPLACE(REPLACE(qt.query_sql_text, CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 100) AS sql_text
-FROM s JOIN sys.query_store_query q ON q.query_id = s.query_id JOIN sys.query_store_query_text qt ON qt.query_text_id = q.query_text_id
+FROM s JOIN sys.query_store_query_text qt ON qt.query_text_id = s.query_text_id
 WHERE s.cpuA >= 5 * 60e6 OR s.cpuC >= 5 * 60e6
 ORDER BY ABS(s.cpuC - s.cpuA) DESC;

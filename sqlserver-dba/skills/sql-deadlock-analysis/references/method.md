@@ -54,7 +54,7 @@ A graph (`<deadlock>`) has three parts.
 | IS / IU / IX | Intent locks on the parent (page, table) |
 | SIX | Shared plus intent exclusive |
 | Sch-S / Sch-M | Schema stability / modification |
-| RangeS-S, RangeS-U, RangeI-N, RangeX-X | Key-range locks: serializable only |
+| RangeS-S, RangeS-U, RangeI-N, RangeX-X | Key-range locks. A serializable session takes them on every read, but any session takes them where the code asks (`HOLDLOCK` / `SERIALIZABLE` table hints, `MERGE … HOLDLOCK`), and cascading foreign keys and indexed views take them too |
 
 **Draw the cycle:** side A holds R1 and wants R2; side B holds R2 and wants R1. If you can't say that sentence for a graph, read it again before moving on. With more than two sides it is a ring; name every link.
 
@@ -69,12 +69,13 @@ A graph (`<deadlock>`) has three parts.
 | `two-indexes` | One table, two indexes | D4 |
 | `page` | Page locks | D5 |
 | `heap` | RID locks | D6 |
-| `range` | Range modes or serializable isolation | D7 |
+| `range` | A side runs at serializable isolation (usually set by the client) | D7 |
+| `range-hint` | Range modes at a normal isolation level: hints or `MERGE … HOLDLOCK` in the code (including local fixes that add `UPDLOCK, HOLDLOCK`), cascading foreign keys, indexed views | D7, but the owner is the code, not the client |
 | `table-lock` | Object locks other than schema locks | D8 |
 | `schema` | Metadata locks or Sch-S/Sch-M | D12 |
 | `parallel` | Exchange or threadpool resources, or one spid on several processes | D13 |
 | `applock` | Application locks | D14 |
-| `low-priority` / `monitoring-tool` | Negative priority or a known tool name | D15 |
+| `low-priority` / `monitoring-tool` | Negative priority, or a known monitoring product's name as a whole word (add the site's own tools with the analyzer's `-MonitorApps`, from the site profile) | D15 |
 | `client-tran` / `implicit-tran` / `distributed` | Transaction shape | D16 |
 | `multi-party` | More than two sessions | — |
 | `agent-job` | A SQL Agent job is a side | Upstream (18) |

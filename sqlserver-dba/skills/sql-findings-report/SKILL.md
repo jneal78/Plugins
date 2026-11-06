@@ -35,7 +35,7 @@ Keep each to about 12 nodes; prefer top-to-bottom for chains longer than five. I
 
 ## Render and check
 
-1. Put the markdown into `core/render/report_shell.html` (between the `<script type="text/markdown" id="src">` tags) and set the `<title>`.
+1. Copy `core/render/report_shell.html` next to the markdown (never edit the plugin's own copy: it is shared, and site data would end up in it), put the markdown between the `<script type="text/markdown" id="src">` tags and set the `<title>`.
 2. Run `core/render/render_pdf.ps1 -Html <file.html> [-Screenshot]` – local only, it touches no database (it loads marked and mermaid from jsDelivr, so it needs internet).
 3. **Look at the result** before sending: every diagram rendered (not raw text), text readable at page width, tables fit. If a diagram is cramped, change its direction or split it.
 

@@ -34,7 +34,7 @@ Copy a script to a scratch folder, fill its `EDIT ME` block, run it with `sqlcmd
 ## What matters most
 
 - **Rank by recoverable CPU per day**, then user impact (latency, timeouts), then risk. 60 CPU-min per hour is one core busy. Hedge estimates ("≈ 90 CPU-min/day").
-- **Calls are not business events.** Before calling a rise "load growth", check the business table that records the outcome (orders, invoices, messages). If the user's real complaint is a slow business process and the server looks fine, that's **sql-client-path-profiler**.
+- **Calls are not business events.** Before calling a rise "load growth", check the business table that records the outcome (orders, invoices, messages). If the user's real complaint is a slow business process and the server looks fine, that's **sql-client-path-profiler** (planned, not in the plugin yet: until then, say so, and measure the process from its business table).
 - **Query Store has blind spots:** the plans-per-query cap, size-based cleanup, objects dropped and recreated by upgrades, literal ad hoc SQL. Cross-check surprising drops against the plan cache and match statements by `query_hash` (`core/query-store.md`).
 - **Group before you rank.** A hundred literal ad hoc statements with one `query_hash` are one problem. Integration groups (from the profile) show which owner to talk to.
 - **Per execution vs per hour:** a statement can get cheaper per call and costlier per hour because it is called more. Show both when they disagree.

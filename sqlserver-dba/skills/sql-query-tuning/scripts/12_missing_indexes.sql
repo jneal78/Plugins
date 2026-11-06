@@ -11,7 +11,7 @@
                 - check section 2 for an index with the same leading key that an INCLUDE would complete;
                 - weigh write cost (user_writes) on busy tables;
                 - prefer an in-code fix when the request comes from one bad statement (see 06 and the
-                  fix-patterns reference); a vendor table index needs your prefix and the vendor's knowledge.
+                  core/fix-catalog.md); a vendor table index needs your prefix and the vendor's knowledge.
     Run     : sqlcmd -S <server> -d <db> -E -I -W -s"|" -i 12_missing_indexes.sql
 */
 SET NOCOUNT ON;
