@@ -26,12 +26,14 @@ All skills share `core/`: safety rules, the site-profile and findings-ledger tem
 
 ## Install (Claude Code)
 
-From a clone of this repository:
+From the GitHub marketplace this plugin is published in (replace `<owner>/Plugins` with that repository's owner and name):
 
 ```
-/plugin marketplace add <path-or-url-of-this-repo>
-/plugin install sqlserver-dba@sqlserver-dba
+/plugin marketplace add <owner>/Plugins
+/plugin install sqlserver-dba@dba-plugins
 ```
+
+Or from a local copy of this folder: `/plugin marketplace add <path-to-this-folder>`, then `/plugin install sqlserver-dba@sqlserver-dba`.
 
 Start a new session afterwards. If you previously installed standalone copies of similar skills, remove them so two skills don't answer the same request.
 

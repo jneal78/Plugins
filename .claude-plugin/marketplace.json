@@ -1,0 +1,11 @@
+{
+  "name": "dba-plugins",
+  "owner": { "name": "sqlserver-dba contributors" },
+  "plugins": [
+    {
+      "name": "sqlserver-dba",
+      "source": "./sqlserver-dba",
+      "description": "Read-only SQL Server performance and reliability skills for DBAs: health checks, workload hotspots, query tuning, deadlock analysis, release verification, a daily dashboard and write-ups for vendors and managers."
+    }
+  ]
+}
