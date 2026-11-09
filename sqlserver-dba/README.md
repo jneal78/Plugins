@@ -62,4 +62,4 @@ Give Claude's login:
 
 ## License
 
-MIT (to be added with the first public release).
+MIT, © 2026 sqlserver-dba contributors. See `LICENSE`.
