@@ -46,7 +46,7 @@ Give Claude's login:
 - read access to `msdb` (`SQLAgentReaderRole`) only if Agent jobs should be named in deadlock and release work (deadlock script 18);
 - `db_datareader` only where business-table metrics are needed.
 
-**Strongly recommended:** a Claude Code hook that blocks write keywords in any command naming a production server. The bundled scripts are written to pass one. A portable hook ships here in a later release.
+**Strongly recommended:** a Claude Code hook that blocks write keywords in any command naming a production server. The plugin doesn't ship one: use your organization's own. The bundled scripts are written to pass one.
 
 ## Requirements
 

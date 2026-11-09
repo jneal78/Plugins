@@ -49,7 +49,7 @@ sequenceDiagram
   participant SVC as Connector service (APPHOST, login SVCUSER)
   participant DB as Production database
   EXT->>SVC: Carrier change (address, no pay-to)
-  SVC->>DB: UPDATE carrier SET ..., pto_id = COALESCE(@p bigint NULL, pto_id varchar)
+  SVC->>DB: UPDATE carrier SET ..., pay_to = COALESCE(@p bigint NULL, pay_to varchar)
   DB-->>SVC: Msg 8114 varchar to bigint, statement rolled back
   Note over SVC: Address not saved, retried next cycle
   Note over DB: ≈4,500 failures/day, 50 successes

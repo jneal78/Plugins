@@ -155,7 +155,7 @@ html { scroll-behavior: smooth; }
   <ol>
     <li><a href="#overview">Overview</a></li>
     <li><a href="#how">How it fits together</a></li>
-    <li><a href="#skills">The six skills</a></li>
+    <li><a href="#skills">The seven skills</a></li>
     <li><a href="#examples">Examples</a></li>
     <li><a href="#core">The shared core</a></li>
     <li><a href="#site">Your site folder</a></li>
@@ -168,12 +168,12 @@ html { scroll-behavior: smooth; }
 
 <main>
 <header class="top">
-  <span class="kicker">Claude Code plugin · version 0.2</span>
+  <span class="kicker">Claude Code plugin · version 0.4</span>
   <h1>sqlserver-dba: skills for a careful senior DBA</h1>
-  <p class="lede">Six Claude skills that check a busy SQL Server's health, find where its time goes, explain why the expensive statements are expensive, untangle its deadlocks down to the code and the caller behind them, prove the smallest fix, and write it up for the team or the vendor. Claude only reads production; a person deploys every change.</p>
+  <p class="lede">Seven Claude skills that check a busy SQL Server's health, find where its time goes, explain why the expensive statements are expensive, untangle its deadlocks down to the code and the caller behind them, verify vendor releases, prove the smallest fix, and write it up for the team or the vendor, with a reproduction kit their support engineer can run. Claude only reads production; a person deploys every change.</p>
   <div class="facts">
     <span class="chip ok">Read-only on production</span>
-    <span class="chip">SQL Server 2016+ with Query Store</span>
+    <span class="chip">SQL Server 2017+ with Query Store</span>
     <span class="chip">No organization data in the plugin</span>
     <span class="chip">Fixes come with exact rollbacks</span>
   </div>
@@ -197,7 +197,7 @@ html { scroll-behavior: smooth; }
 <pre class="mermaid">
 flowchart TB
     subgraph Plugin["sqlserver-dba plugin – shared"]
-        SK["skills/<br/>health-check · workload-hotspots · query-tuning<br/>deadlock-analysis · daily-dashboard · findings-report"]
+        SK["skills/<br/>health-check · workload-hotspots · query-tuning<br/>deadlock-analysis · release-verification<br/>daily-dashboard · findings-report"]
         CO["core/<br/>safety · site and ledger templates · field guides<br/>fix catalog · patch packaging · report rendering"]
         TL["tools/<br/>scrub check · read-only script lint"]
         SK --> CO
@@ -222,6 +222,10 @@ flowchart TB
     Q4([Why is this procedure slow?]) --> QT[sql-query-tuning]
     Q5([Write this up]) --> FR[sql-findings-report]
     Q6([We keep getting deadlocks]) --> DL[sql-deadlock-analysis]
+    Q7([The vendor upgraded last night]) --> RV[sql-release-verification]
+    RV -->|regressed statement| QT
+    RV -->|new deadlock pattern| DL
+    RV -->|verdict, vendor tickets| FR
     HC -->|top candidate| HS
     HC -->|deadlock rate above normal| DL
     DL -->|statement of one side| QT
@@ -240,7 +244,7 @@ flowchart TB
 </section>
 
 <section id="skills">
-  <h2>The six skills</h2>
+  <h2>The seven skills</h2>
   <p>Every skill starts the same way: it finds your site folder, reads the profile and the ledger, and reads the safety rules once per session. Every server query it runs is SELECT-only.</p>
 
   <article class="sheet" id="sql-health-check">
@@ -332,6 +336,29 @@ flowchart TB
     </dl>
   </article>
 
+  <article class="sheet" id="sql-release-verification">
+    <header><h3>sql-release-verification</h3><span class="tag">read-only</span></header>
+    <p class="ask">"The vendor upgraded last night – check it." · "Is the hot-fix working?" · "Did the upgrade overwrite our fix?" · "They upgrade on Thursday – what should we do?"</p>
+    <p>One verdict a DBA, a manager and the vendor can all act on: working as intended, working with regressions, not working, or too early to tell, with measured before → after and re-check dates.</p>
+    <dl>
+      <dt>Steps</dt>
+      <dd><ol>
+        <li>Prepare, when a release is announced: a snapshot of the definitions, a baseline of local changes, a live benchmark of the objects that matter.</li>
+        <li>Scope: the deploy window and everything added, redefined or removed.</li>
+        <li>Real changes: which objects have new code and which were only re-applied (snapshot diffs, or Query Store statement texts when there is no snapshot).</li>
+        <li>Local changes: did our patches, indexes, permissions, signatures, forced plans and plan guides survive? Each patch is as built, a variant, reverted, changed or missing.</li>
+        <li>Same output: changed logic returns the same rows, or exactly the intended difference.</li>
+        <li>Cost: per statement and per object, after vs the hours before and vs the same hours a week ago; a live benchmark in the first hour.</li>
+        <li>Failures: new errors, timeouts, deadlocks and lock waits, counted apart from the deploy window itself.</li>
+        <li>Verdict, to-do list with owners, re-check dates, and ledger updates.</li>
+      </ol></dd>
+      <dt>Rules it keeps</dt>
+      <dd>Production is the truth; release notes are claims. Never measure in the deploy hour. Compare like with like, twice. Rare events need time before they count as fixed. Local patches are never re-applied automatically.</dd>
+      <dt>Scripts</dt>
+      <dd><code>19</code> release changes · <code>20</code> schema events from the default trace · <code>21</code> definition snapshots + <code>Compare-Definitions.ps1</code> · <code>22</code> local changes check · <code>23</code> same-output template · plus hotspots 04/08/09, tuning 07/11 and deadlock 13/16</dd>
+    </dl>
+  </article>
+
   <article class="sheet" id="sql-daily-dashboard">
     <header><h3>sql-daily-dashboard</h3><span class="tag">read-only</span></header>
     <p class="ask">"Run the dashboard." · "What's bubbling up?" · "Set up a daily dashboard for our server."</p>
@@ -357,8 +384,10 @@ flowchart TB
       <dd>Analysis of one problem · vendor bug ticket with an impact assessment (data, business, exposure, performance) · short vendor note for a local patch · health or week-over-week report.</dd>
       <dt>Diagrams</dt>
       <dd>Mermaid diagrams that show a mechanism: the hot path from caller to the expensive operator, before-and-after plan shape, a sequence for an integration or a deadlock, a trend.</dd>
+      <dt>Reproduction kit</dt>
+      <dd>Every vendor ticket and note carries one, so the vendor's level-2 support engineer can verify the problem in under an hour: a read-only script that prints the environment and data shape that decide the plan, runs the statement as shipped and with the change (actual plans included), and measures CPU, elapsed, logical and physical reads, file I/O and waits per run, plus a row-count and checksum parity check and the statement's cost in Query Store. The ticket gets numbered steps, what to expect at each, our numbers to compare against, and the plans as <code>.sqlplan</code> files.</dd>
       <dt>Output</dt>
-      <dd>Markdown rendered to HTML and PDF locally with headless Edge or Chrome, checked by screenshot before it's handed over. Claude never sends anything itself.</dd>
+      <dd>Markdown rendered to HTML and PDF locally with headless Edge or Chrome, checked by screenshot before it's handed over, with the kit and plans beside the PDF. Claude never sends anything itself.</dd>
     </dl>
   </article>
 </section>
@@ -580,6 +609,17 @@ sequenceDiagram
 </pre>
     </div>
     <p>The impact assessment leads with the data – addresses that never get saved – rather than CPU, and the asks are specific: type the parameter to the column, set an Application Name in the connection string, and replay what failed.</p>
+    <p>For a slow plan, the ticket's <strong>"How to reproduce and verify"</strong> section does the support engineer's work for them. Claude fills <code>repro_kit_TEMPLATE.sql</code>, runs it first where it measured, and puts that output in the ticket so the vendor's run compares line for line. From a lookup function that scanned a whole table for every call:</p>
+<pre class="cmd">sqlcmd -S SQLPROD01 -d AppDb -E -I -W -s"|" -t 120 -i repro_udf_LookupTractor.sql -o repro_output.txt
+
+run|variant    |cpu_ms|elapsed_ms|logical_reads|physical_reads|top_waits
+1  |as shipped |   414|       582|         7375|             0|SOS_SCHEDULER_YIELD 216 ms
+2  |as shipped |   458|       877|         7375|             0|SOS_SCHEDULER_YIELD 448 ms
+3  |with change|     1|         0|            7|             0|
+variant    |rows_|checksum_
+as shipped |    1|1382558254
+with change|    1|1382558254</pre>
+    <p>The steps tell the engineer what to compare first (compatibility level, cardinality estimator, MAXDOP, the data shape), which operator to open in the plan (Clustered Index Scan, NodeId 1, 1.9M rows read for 1 returned), and the pass criteria in numbers. The attached <code>.sqlplan</code> files show both plans.</p>
   </article>
 
   <article class="example" id="ex-setup">
@@ -597,8 +637,9 @@ sequenceDiagram
 
 Ledger: findings-ledger.md</pre>
     <p>Before any commit to the plugin, contributors run the two checks:</p>
-<pre class="cmd">pwsh -File tools/Test-Scrub.ps1           # Clean: 72 files checked against 39 terms.
-pwsh -File tools/Test-ReadOnlyScripts.ps1 # Read-only: 24 SQL and 3 PowerShell files checked.</pre>
+<pre class="cmd">pwsh -File tools/Test-Scrub.ps1           # Clean: 84 files and 7 commits checked against 39 terms.
+pwsh -File tools/Test-ReadOnlyScripts.ps1 # Read-only: 29 SQL and 4 PowerShell files checked.</pre>
+    <p>The scrub check reads the files that get published and the git history (authors, committers, messages), using a deny-list of names kept in your own site folder. The read-only check also catches sqlcmd commands and procedures called without <code>EXEC</code>.</p>
   </article>
 
   <h3>Turning any write-up into a PDF</h3>
@@ -619,8 +660,8 @@ Screenshot: docs\Analysis.png</pre>
       <tr><td><code>interpretation.md</code></td><td>Conversions (60 CPU-minutes per hour is one busy core) and default thresholds, which your profile can override</td></tr>
       <tr><td><code>query-store.md</code></td><td>The joins, execution types, gotchas that change conclusions, and matching statements across an upgrade</td></tr>
       <tr><td><code>fix-catalog.md</code></td><td>19 patterns: symptom → evidence → minimal fix → proof, with measured results</td></tr>
-      <tr><td><code>patch-package.md</code></td><td>Guarded deploy, byte-exact rollback and its traps, parity test, verify script, vendor note</td></tr>
-      <tr><td><code>templates/</code></td><td>Site profile, findings ledger, patch files, analysis, vendor ticket and vendor note, and a DBA-run dedicated deadlock session</td></tr>
+      <tr><td><code>patch-package.md</code></td><td>Guarded deploy, guarded byte-exact rollback and its traps, parity test, verify script, vendor note with its reproduction kit</td></tr>
+      <tr><td><code>templates/</code></td><td>Site profile, findings ledger, patch files (deploy, rollback, parity, verify, README), analysis, vendor ticket, vendor note, the vendor's read-only reproduction kit, and a DBA-run dedicated deadlock session</td></tr>
       <tr><td><code>render/</code></td><td>Markdown + mermaid to HTML, and HTML to PDF and screenshot</td></tr>
     </tbody>
   </table></div>
@@ -667,6 +708,10 @@ Screenshot: docs\Analysis.png</pre>
     <li>An extended-events ring buffer is cast to a variable once; shredding it inside a CTE re-evaluates the cast per node and can cost minutes of CPU.</li>
     <li>DMVs are never joined to large user tables in one query; the optimizer has no statistics for DMVs and can scan the table once per session row.</li>
     <li>Data from application or session hosts comes from a read-only collector the host's admin runs. It runs for a set duration, because hosts may be on another time zone, and writes UTC timestamps.</li>
+    <li>A SELECT copy of an application statement is made safe before it runs: locking hints and side effects removed, a 5-second lock timeout, low deadlock priority, and the estimated plan read first.</li>
+    <li>Query Store rows are summed per statement before they are named. Naming hundreds of thousands of runtime rows took minutes; the same work on the aggregated rows takes seconds.</li>
+    <li>Text and plan lookups never run for the whole plan cache: the entries are found first through cheap columns, then only those are read.</li>
+    <li>Each date gets its own daylight-saving offset (a Windows time zone name and <code>AT TIME ZONE</code>), and windows hold whole Query Store intervals, so "the same hours a week ago" really are the same hours.</li>
     <li>Query Store history is read once per target through a seekable filter (object or query hash). One query over every target read the whole store and hit its timeout.</li>
     <li>Guardrails scan PowerShell scripts run with <code>-File</code> as well as commands, so the bundled scripts carry no write keywords, even in comments.</li>
     <li>If a production guardrail hook blocks a command, Claude stops and hands that step to you. It never rewords or splits a command to get past it.</li>
@@ -675,13 +720,13 @@ Screenshot: docs\Analysis.png</pre>
   <div class="tablewrap"><table>
     <thead><tr><th>File</th><th>Purpose</th><th>Run by</th></tr></thead>
     <tbody>
-      <tr><td>Rollback</td><td>The live definition byte for byte, as an alter; restores the original hash exactly</td><td>DBA, if needed</td></tr>
+      <tr><td>Rollback</td><td>Guarded: refuses unless the live object is exactly our patch (so it can't overwrite a vendor upgrade), then the original byte for byte; restores the original hash exactly</td><td>DBA, if needed</td></tr>
       <tr><td>Patched copy</td><td>The live definition plus the marked lines</td><td>—</td></tr>
-      <tr><td>Guarded deploy</td><td>Stops on the wrong database, a changed hash, already patched, running right now, signed, plan guide, SET options, trigger order</td><td>DBA</td></tr>
-      <tr><td>Parity test</td><td>Original vs patched statement, rows and cost compared</td><td>DBA</td></tr>
+      <tr><td>Guarded deploy</td><td>Stops on the wrong database, a changed hash, already patched, running right now, signed, plan guide, SET options that differ, a trigger order it would lose, a missing index the hints rely on</td><td>DBA</td></tr>
+      <tr><td>Parity test</td><td>Original vs patched statement, rows compared with their duplicate counts, and cost</td><td>DBA</td></tr>
       <tr><td>Verify script</td><td>Read-only: original / patched / changed, plan cache and Query Store before vs after, errors</td><td>Anyone</td></tr>
       <tr><td>README</td><td>Problem, change, measured results, variants tried, hashes, deploy steps, what to do after upgrades</td><td>—</td></tr>
-      <tr><td>Vendor note</td><td>The change in the vendor's terms, with the permanent fix we suggest</td><td>Sent by you</td></tr>
+      <tr><td>Vendor note</td><td>The change in the vendor's terms, the permanent fix we suggest, and the reproduction kit with both plans</td><td>Sent by you</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -718,14 +763,16 @@ Screenshot: docs\Analysis.png</pre>
   <ul>
     <li><code>VIEW SERVER STATE</code> and <code>VIEW DATABASE STATE</code> (SQL Server 2022: <code>VIEW SERVER PERFORMANCE STATE</code>)</li>
     <li><code>VIEW DEFINITION</code> where code fingerprints are wanted</li>
+    <li><code>SHOWPLAN</code> where estimated plans are read</li>
+    <li>read access to <code>msdb</code> (<code>SQLAgentReaderRole</code>) only if Agent jobs should be named in deadlock and release work</li>
     <li><code>db_datareader</code> only where business-table metrics are needed</li>
   </ul>
   <h3>4. Add a production guardrail (strongly recommended)</h3>
-  <p>A Claude Code hook that blocks write keywords in any command naming a production server. The bundled scripts are written to pass one.</p>
+  <p>A Claude Code hook that blocks write keywords in any command naming a production server. The plugin doesn't ship one: use your organization's own. The bundled scripts are written to pass one.</p>
   <h3>Requirements</h3>
   <ul>
-    <li>SQL Server 2016 or later with Query Store on; 2019 and 2022 give the best data. Azure SQL Managed Instance mostly works; Azure SQL Database is not supported yet.</li>
-    <li><code>sqlcmd</code> on the machine running Claude, and PowerShell 7 for the dashboard and tools.</li>
+    <li>SQL Server 2017 or later with Query Store on; 2019 and 2022 give the best data. Azure SQL Managed Instance mostly works; Azure SQL Database is not supported yet.</li>
+    <li>Windows first: <code>sqlcmd</code> with integrated authentication on the machine running Claude, PowerShell 7 for the dashboard and tools, and Git Bash's <code>awk</code> and <code>tr</code> for the health check's live-rate summary.</li>
     <li>For PDFs: Edge or Chrome, and internet access to load the markdown and mermaid scripts.</li>
   </ul>
 </section>
@@ -735,11 +782,7 @@ Screenshot: docs\Analysis.png</pre>
   <div class="tablewrap"><table>
     <thead><tr><th>Next</th><th>What it adds</th></tr></thead>
     <tbody>
-      <tr><td><code>sql-release-verification</code></td><td>After a vendor upgrade or hot-fix: what changed, before vs after per statement, result equivalence, and which local patches the upgrade reverted</td></tr>
       <tr><td><code>sql-client-path-profiler</code></td><td>"Is it the database or the app?" – business throughput from the business table, live session sampling (time in SQL, round trips, client waits), host counters lined up minute by minute, and a verdict</td></tr>
-      <tr><td>Portable guardrail</td><td>A cross-platform PowerShell 7 hook with a configuration file and its own tests</td></tr>
-      <tr><td>Lab and evaluations</td><td>A Docker SQL Server 2022 database seeded with the problems the skills must find, and tests that show each skill helps</td></tr>
-      <tr><td>Public release</td><td>MIT license, after the scrub check and the lab evaluations pass</td></tr>
     </tbody>
   </table></div>
   <h3>Contributing</h3>
@@ -750,7 +793,7 @@ Screenshot: docs\Analysis.png</pre>
   </ul>
 </section>
 
-<footer>sqlserver-dba 0.2.0 · internal release, November 2026</footer>
+<footer>sqlserver-dba 0.4.0 · November 2026</footer>
 </main>
 </div>
 
